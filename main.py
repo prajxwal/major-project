@@ -247,13 +247,32 @@ class GazeSpeakApp(QMainWindow):
         self._sentence_bar.add_word(word)
     
     def _on_text_changed(self, text):
-        """Update word predictions when text changes."""
+        """Update word predictions when text changes — hybrid local + LLM."""
         current_word = self._sentence_bar.get_current_word()
+        
         if current_word:
-            predictions = self._predictor.predict(current_word)
-            self._prediction_bar.set_predictions(predictions)
+            # Instant local predictions
+            local_predictions = self._predictor.predict(current_word)
+            self._prediction_bar.set_predictions(local_predictions)
+            
+            # Async LLM predictions (replace local when ready)
+            self._predictor.predict_with_llm(
+                text, current_word,
+                callback=self._on_llm_predictions
+            )
+        elif text.endswith(" "):
+            # Just finished a word — predict next word
+            self._predictor.predict_next_word(
+                text,
+                callback=self._on_llm_predictions
+            )
         else:
             self._prediction_bar.set_predictions([])
+    
+    def _on_llm_predictions(self, words):
+        """Handle async LLM prediction results (called from background thread)."""
+        # Use QTimer to safely update UI from background thread
+        QTimer.singleShot(0, lambda: self._prediction_bar.set_predictions(words))
     
     def _on_phrase_selected(self, phrase):
         """Handle quick phrase selection — speak immediately."""

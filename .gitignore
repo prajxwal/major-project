@@ -20,9 +20,13 @@ dist/
 build/
 *.egg-info/
 
+# Environment
+.env
+
 # OS
 .DS_Store
 Thumbs.db
 
 # GazeSpeak
 *.log
+*.task
