@@ -97,6 +97,12 @@ class SentenceBar(QWidget):
         self._update_display()
         self.text_changed.emit(self._text)
     
+    def set_text(self, text):
+        """Replace all text (used by abbreviation expansion)."""
+        self._text = text + " "
+        self._update_display()
+        self.text_changed.emit(self._text)
+    
     def backspace(self):
         """Delete the last character."""
         if self._text:

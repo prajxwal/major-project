@@ -29,6 +29,7 @@ class PredictionBar(QWidget):
         self._dwell_progress = 0.0
         self._dwell_time_ms = 800
         self._selected_index = -1
+        self._is_long_text = False
         
         # Gaze position
         self._gaze_x = 0.0
@@ -55,6 +56,7 @@ class PredictionBar(QWidget):
     def set_predictions(self, words):
         """Update the displayed word predictions."""
         self._predictions = words[:5]  # max 5
+        self._is_long_text = any(len(w) > 15 for w in self._predictions)
         self._compute_rects()
         self.update()
     
@@ -164,11 +166,16 @@ class PredictionBar(QWidget):
             painter.setPen(border)
             painter.drawPath(path)
             
-            # Word text
+            # Word text (use smaller font for long text like expansions)
             text_color = QColor(10, 10, 10) if is_selected else QColor(200, 210, 230)
             painter.setPen(text_color)
-            painter.setFont(QFont("Segoe UI", 16, QFont.Weight.Medium))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, word)
+            font_size = 12 if self._is_long_text else 16
+            painter.setFont(QFont("Segoe UI", font_size, QFont.Weight.Medium))
+            
+            # Elide text if too long for the button
+            metrics = painter.fontMetrics()
+            elided = metrics.elidedText(word, Qt.TextElideMode.ElideRight, int(rect.width()) - 16)
+            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, elided)
             
             # Dwell ring
             if is_hovered and self._dwell_progress > 0:

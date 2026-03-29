@@ -33,6 +33,15 @@ RIGHT_EYE_BOTTOM = 374
 LEFT_IRIS = [468, 469, 470, 471, 472]   # center, right, top, left, bottom
 RIGHT_IRIS = [473, 474, 475, 476, 477]  # center, right, top, left, bottom
 
+# Eye landmarks for EAR (Eye Aspect Ratio) blink detection
+# 6 points per eye: [outer_corner, top1, top2, inner_corner, bottom1, bottom2]
+LEFT_EYE_EAR = [33, 160, 158, 133, 153, 144]
+RIGHT_EYE_EAR = [263, 387, 385, 362, 380, 373]
+
+# Blink detection thresholds
+EAR_BLINK_THRESHOLD = 0.21   # EAR below this = eyes closed
+EAR_CONSEC_FRAMES = 2        # min consecutive frames below threshold for a blink
+
 # Path to the face landmarker model
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "face_landmarker.task")
 
@@ -51,6 +60,7 @@ class GazeTracker(QThread):
     gaze_updated = pyqtSignal(float, float, float)  # x, y, confidence
     frame_ready = pyqtSignal(np.ndarray)
     tracking_lost = pyqtSignal()
+    blink_detected = pyqtSignal()  # emitted on each confirmed blink
     
     def __init__(self, camera_index=0):
         super().__init__()
@@ -65,6 +75,10 @@ class GazeTracker(QThread):
         self._smooth_x = 0.0
         self._smooth_y = 0.0
         self._smooth_factor = 0.3  # lower = smoother but more latency
+        
+        # Blink detection state
+        self._ear_below_count = 0   # consecutive frames with EAR below threshold
+        self._blink_in_progress = False
         
     def set_calibration(self, matrix):
         """Set the calibration transformation matrix."""
@@ -128,6 +142,9 @@ class GazeTracker(QThread):
             
             if result.face_landmarks and len(result.face_landmarks) > 0:
                 landmarks = result.face_landmarks[0]  # first face
+                
+                # --- Blink detection (runs regardless of iris landmarks) ---
+                self._check_blink(landmarks, w, h)
                 
                 # Check if iris landmarks are available (indices 468-477)
                 if len(landmarks) > 477:
@@ -279,6 +296,50 @@ class GazeTracker(QThread):
             return float(result[0]), float(result[1])
         else:
             return raw_x, raw_y
+    
+    def _compute_ear(self, eye_indices, landmarks, w, h):
+        """
+        Compute Eye Aspect Ratio for blink detection.
+        
+        EAR = (||p2-p6|| + ||p3-p5||) / (2 * ||p1-p4||)
+        Where p1-p6 are the 6 eye landmark points.
+        """
+        try:
+            pts = []
+            for idx in eye_indices:
+                pts.append(np.array([
+                    landmarks[idx].x * w,
+                    landmarks[idx].y * h
+                ]))
+            # p1=outer, p2=top1, p3=top2, p4=inner, p5=bottom2, p6=bottom1
+            vertical_1 = np.linalg.norm(pts[1] - pts[5])  # ||p2 - p6||
+            vertical_2 = np.linalg.norm(pts[2] - pts[4])  # ||p3 - p5||
+            horizontal = np.linalg.norm(pts[0] - pts[3])  # ||p1 - p4||
+            
+            if horizontal < 1:
+                return 0.3  # default open
+            
+            ear = (vertical_1 + vertical_2) / (2.0 * horizontal)
+            return ear
+        except (IndexError, AttributeError):
+            return 0.3
+    
+    def _check_blink(self, landmarks, w, h):
+        """Detect blink using Eye Aspect Ratio and emit signal."""
+        left_ear = self._compute_ear(LEFT_EYE_EAR, landmarks, w, h)
+        right_ear = self._compute_ear(RIGHT_EYE_EAR, landmarks, w, h)
+        avg_ear = (left_ear + right_ear) / 2.0
+        
+        if avg_ear < EAR_BLINK_THRESHOLD:
+            self._ear_below_count += 1
+            if self._ear_below_count >= EAR_CONSEC_FRAMES:
+                self._blink_in_progress = True
+        else:
+            if self._blink_in_progress:
+                # Eyes opened back up after being closed → blink complete
+                self.blink_detected.emit()
+                self._blink_in_progress = False
+            self._ear_below_count = 0
     
     def _draw_landmarks(self, frame, landmarks, w, h):
         """Draw iris and eye landmarks on the frame for visual feedback."""

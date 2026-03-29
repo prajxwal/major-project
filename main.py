@@ -29,7 +29,10 @@ from ui.sentence_bar import SentenceBar
 from ui.prediction_bar import PredictionBar
 from ui.quick_phrases import QuickPhrasesPanel
 from ui.settings_panel import SettingsPanel
+from ui.context_bar import ContextBar
 from prediction.predictor import WordPredictor
+from prediction.abbreviation_expander import AbbreviationExpander
+from alerts.blink_alert import BlinkAlertManager
 
 
 class WebcamWidget(QLabel):
@@ -77,7 +80,12 @@ class GazeSpeakApp(QMainWindow):
         # Core components
         self._tracker = GazeTracker()
         self._predictor = WordPredictor()
+        self._abbreviation_expander = AbbreviationExpander()
         self._calibration = CalibrationScreen()
+        self._blink_alert = BlinkAlertManager()
+        
+        # Abbreviation mode tracking
+        self._abbrev_mode = False  # True when showing abbreviation expansions
         
         # Build UI
         self._setup_ui()
@@ -93,6 +101,9 @@ class GazeSpeakApp(QMainWindow):
         
         # Apply dark theme
         self._apply_theme()
+        
+        # Set up alert notification UI callback
+        self._blink_alert.set_alert_callback(self._show_alert_notification)
     
     def _setup_ui(self):
         """Build the main UI layout."""
@@ -144,6 +155,10 @@ class GazeSpeakApp(QMainWindow):
         
         main_layout.addWidget(self._stacked, stretch=1)
         
+        # --- Caretaker context bar (bottom) ---
+        self._context_bar = ContextBar()
+        main_layout.addWidget(self._context_bar)
+        
         # --- Gaze cursor overlay ---
         self._gaze_cursor = GazeCursor(central)
         self._gaze_cursor.setGeometry(0, 0, self.width(), self.height())
@@ -156,6 +171,9 @@ class GazeSpeakApp(QMainWindow):
         self._tracker.gaze_updated.connect(self._on_gaze_updated)
         self._tracker.frame_ready.connect(self._webcam_widget.update_frame)
         self._tracker.tracking_lost.connect(self._on_tracking_lost)
+        
+        # Blink detection → alert system
+        self._tracker.blink_detected.connect(self._blink_alert.register_blink)
         
         # Calibration
         self._calibration.calibration_complete.connect(self._on_calibration_complete)
@@ -180,6 +198,9 @@ class GazeSpeakApp(QMainWindow):
         self._settings.tts_rate_changed.connect(self._sentence_bar.set_tts_rate)
         self._settings.recalibrate_requested.connect(self._start_calibration)
         self._settings.close_requested.connect(lambda: self._stacked.setCurrentIndex(0))
+        
+        # Caretaker context bar
+        self._context_bar.context_submitted.connect(self._on_caretaker_context)
     
     def _on_gaze_updated(self, gaze_x, gaze_y, confidence):
         """Handle gaze position updates from the tracker."""
@@ -243,36 +264,67 @@ class GazeSpeakApp(QMainWindow):
             self._stacked.setCurrentIndex(2)  # show settings
     
     def _on_word_selected(self, word):
-        """Handle word prediction selection."""
-        self._sentence_bar.add_word(word)
+        """Handle word/expansion prediction selection."""
+        if self._abbrev_mode:
+            # In abbreviation mode: replace ALL text with the expanded sentence
+            self._sentence_bar.set_text(word)
+            self._abbreviation_expander.add_patient_message(word)
+            self._abbrev_mode = False
+        else:
+            self._sentence_bar.add_word(word)
     
     def _on_text_changed(self, text):
-        """Update word predictions when text changes — hybrid local + LLM."""
+        """Update word predictions when text changes — with abbreviation detection."""
         current_word = self._sentence_bar.get_current_word()
         
         if current_word:
-            # Instant local predictions
-            local_predictions = self._predictor.predict(current_word)
-            self._prediction_bar.set_predictions(local_predictions)
-            
-            # Async LLM predictions (replace local when ready)
-            self._predictor.predict_with_llm(
-                text, current_word,
-                callback=self._on_llm_predictions
-            )
+            # Check if this looks like an abbreviation
+            if self._abbreviation_expander.is_likely_abbreviation(current_word):
+                self._abbrev_mode = True
+                # Show local predictions immediately as fallback
+                local_predictions = self._predictor.predict(current_word)
+                self._prediction_bar.set_predictions(local_predictions)
+                
+                # Fire async abbreviation expansion
+                self._abbreviation_expander.expand(
+                    current_word,
+                    callback=self._on_abbreviation_expanded
+                )
+            else:
+                self._abbrev_mode = False
+                # Normal word prediction
+                local_predictions = self._predictor.predict(current_word)
+                self._prediction_bar.set_predictions(local_predictions)
+                
+                # Async LLM predictions (replace local when ready)
+                self._predictor.predict_with_llm(
+                    text, current_word,
+                    callback=self._on_llm_predictions
+                )
         elif text.endswith(" "):
+            self._abbrev_mode = False
             # Just finished a word — predict next word
             self._predictor.predict_next_word(
                 text,
                 callback=self._on_llm_predictions
             )
         else:
+            self._abbrev_mode = False
             self._prediction_bar.set_predictions([])
     
     def _on_llm_predictions(self, words):
         """Handle async LLM prediction results (called from background thread)."""
-        # Use QTimer to safely update UI from background thread
-        QTimer.singleShot(0, lambda: self._prediction_bar.set_predictions(words))
+        if not self._abbrev_mode:  # don't overwrite abbreviation expansions
+            QTimer.singleShot(0, lambda: self._prediction_bar.set_predictions(words))
+    
+    def _on_abbreviation_expanded(self, expansions):
+        """Handle async abbreviation expansion results."""
+        QTimer.singleShot(0, lambda: self._prediction_bar.set_predictions(expansions))
+    
+    def _on_caretaker_context(self, question):
+        """Handle caretaker question submission — sets context for abbreviation expander."""
+        self._abbreviation_expander.set_caretaker_context(question)
+        print(f"[GazeSpeak] Caretaker context set: '{question}'")
     
     def _on_phrase_selected(self, phrase):
         """Handle quick phrase selection — speak immediately."""
@@ -319,8 +371,45 @@ class GazeSpeakApp(QMainWindow):
         elif event.key() == Qt.Key.Key_F5:
             self._start_calibration()
     
+    def _show_alert_notification(self, message):
+        """Show emergency alert notification on screen."""
+        # Use QTimer to safely update UI from background thread
+        QTimer.singleShot(0, lambda: self._display_alert_banner(message))
+    
+    def _display_alert_banner(self, message):
+        """Display a red alert banner at the top of the screen."""
+        alert_banner = QLabel(message)
+        alert_banner.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+        alert_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        alert_banner.setStyleSheet("""
+            QLabel {
+                background-color: #ff2040;
+                color: white;
+                padding: 16px;
+                border-radius: 0;
+                font-size: 18px;
+            }
+        """)
+        alert_banner.setFixedHeight(60)
+        
+        # Insert at top of main layout
+        main_layout = self.centralWidget().layout()
+        main_layout.insertWidget(0, alert_banner)
+        
+        # Auto-remove after 10 seconds
+        QTimer.singleShot(10000, lambda: self._remove_alert_banner(alert_banner))
+    
+    def _remove_alert_banner(self, banner):
+        """Remove the alert banner from the layout."""
+        try:
+            banner.setParent(None)
+            banner.deleteLater()
+        except RuntimeError:
+            pass  # widget already deleted
+    
     def closeEvent(self, event):
         """Clean up on close."""
+        self._blink_alert.stop_alarm()
         self._tracker.stop()
         self._tracker.wait(3000)
         event.accept()
