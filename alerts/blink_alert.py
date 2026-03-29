@@ -41,7 +41,7 @@ class BlinkAlertManager:
 
     def __init__(
         self,
-        blink_threshold=6,
+        blink_threshold=5,
         time_window=4.0,
         cooldown=60.0,
         caregiver_phone=None,
@@ -161,10 +161,8 @@ class BlinkAlertManager:
         try:
             message = self._twilio_client.messages.create(
                 body=(
-                    "🚨 GazeSpeak EMERGENCY ALERT\n\n"
-                    "Your patient triggered an emergency alert by blinking rapidly.\n"
-                    "Please check on them immediately.\n\n"
-                    f"Time: {time.strftime('%Y-%m-%d %H:%M:%S')}"
+                    "SOS ALERT: Patient has triggered emergency blink signal "
+                    f"({self._blink_threshold} blinks). Please check immediately."
                 ),
                 from_=self._twilio_phone,
                 to=self._caregiver_phone,
