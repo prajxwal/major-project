@@ -68,22 +68,36 @@ class GazeTracker(QThread):
         self._running = False
         self._mutex = QMutex()
         
-        # Calibration coefficients (set by calibration module)
-        self._calibration_matrix = None  # 3x3 affine transform
+        # Horizontal calibration data (set by calibration module)
+        self._cal_left_x = None   # gaze ratio when looking fully left
+        self._cal_right_x = None  # gaze ratio when looking fully right
         
         # Smoothing: exponential moving average
-        self._smooth_x = 0.0
-        self._smooth_y = 0.0
-        self._smooth_factor = 0.3  # lower = smoother but more latency
+        self._smooth_x = 0.5
+        self._smooth_y = 0.5
+        self._smooth_factor = 0.25  # lower = smoother but more latency
         
         # Blink detection state
         self._ear_below_count = 0   # consecutive frames with EAR below threshold
         self._blink_in_progress = False
         
-    def set_calibration(self, matrix):
-        """Set the calibration transformation matrix."""
+    def set_calibration(self, cal_data):
+        """Set the calibration data from 2-point horizontal calibration.
+        
+        Args:
+            cal_data: dict with 'left_x' and 'right_x' gaze ratios,
+                      or legacy np.ndarray (ignored, forces recalibration).
+        """
         self._mutex.lock()
-        self._calibration_matrix = matrix
+        if isinstance(cal_data, dict):
+            self._cal_left_x = cal_data.get('left_x')
+            self._cal_right_x = cal_data.get('right_x')
+            print(f"[GazeTracker] ✓ Horizontal calibration set: "
+                  f"left={self._cal_left_x:.3f}, right={self._cal_right_x:.3f}")
+        else:
+            # Legacy matrix format — ignore
+            self._cal_left_x = None
+            self._cal_right_x = None
         self._mutex.unlock()
         
     def set_smoothing(self, factor):
@@ -285,16 +299,36 @@ class GazeTracker(QThread):
             return None
     
     def _apply_calibration(self, raw_x, raw_y):
-        """Apply calibration matrix to map raw gaze ratios to screen coordinates."""
+        """Map raw gaze ratios to screen coordinates using horizontal calibration.
+        
+        Linear mapping: left_x → 0.0 (screen left), right_x → 1.0 (screen right).
+        Y is passed through with slight centering.
+        """
         self._mutex.lock()
-        matrix = self._calibration_matrix
+        left_x = self._cal_left_x
+        right_x = self._cal_right_x
         self._mutex.unlock()
         
-        if matrix is not None:
-            point = np.array([raw_x, raw_y, 1.0])
-            result = matrix @ point
-            return float(result[0]), float(result[1])
+        if left_x is not None and right_x is not None:
+            # Horizontal: linear interpolation between calibrated extremes
+            span = right_x - left_x
+            if abs(span) > 0.01:
+                screen_x = (raw_x - left_x) / span
+            else:
+                screen_x = 0.5
+            
+            # Clamp with small margin (allow slight overshoot)
+            screen_x = max(-0.05, min(1.05, screen_x))
+            screen_x = max(0.0, min(1.0, screen_x))
+            
+            # Vertical: simple centering (use raw ratio, center around 0.5)
+            # Most vertical gaze variation is small, so just scale around center
+            screen_y = 0.3 + raw_y * 0.4  # compress to middle 40% of screen
+            screen_y = max(0.0, min(1.0, screen_y))
+            
+            return screen_x, screen_y
         else:
+            # No calibration — pass through raw values
             return raw_x, raw_y
     
     def _compute_ear(self, eye_indices, landmarks, w, h):

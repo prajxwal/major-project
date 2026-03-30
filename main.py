@@ -3,12 +3,14 @@ GazeSpeak — Assistive Eye-Gaze Typing for ALS Patients
 
 Main entry point. Launches the PyQt6 application with:
 - Webcam-based eye gaze tracking (MediaPipe Face Mesh)
-- 9-point calibration on first launch
+- 2-point horizontal calibration (look left, look right)
 - On-screen QWERTY keyboard with dwell-time selection
 - Word prediction with frequency-ranked dictionary
+- Context-aware abbreviation expansion
 - Quick phrases for common needs
 - Text-to-speech output
-- Caregiver mode (mouse/keyboard fallback)
+- Rapid-blink emergency alert (Twilio SMS)
+- Caregiver mode (mouse/keyboard fallback + STT context)
 
 Usage:
     python main.py
@@ -340,9 +342,9 @@ class GazeSpeakApp(QMainWindow):
         """Launch the calibration screen."""
         self._calibration.start_calibration()
     
-    def _on_calibration_complete(self, matrix):
-        """Apply the new calibration matrix."""
-        self._tracker.set_calibration(matrix)
+    def _on_calibration_complete(self, cal_data):
+        """Apply the new horizontal calibration data."""
+        self._tracker.set_calibration(cal_data)
     
     def _apply_theme(self):
         """Apply the dark theme to the entire application."""
