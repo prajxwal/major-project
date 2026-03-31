@@ -1,9 +1,10 @@
 """
-ui/keyboard_widget.py — On-screen gaze keyboard with dwell selection.
+ui/keyboard_widget.py — On-screen gaze keyboard with step-based navigation.
 
-Renders a QWERTY keyboard grid with large, high-contrast keys. Each key shows
-a dwell progress ring that fills while gaze stays on it. When dwell completes,
-the key is selected with visual feedback.
+Renders a QWERTY keyboard grid with large, high-contrast keys. Navigation is
+DISCRETE: looking left/right steps the highlight one key at a time (like arrow
+keys). The highlight wraps across rows. When the user stops navigating (center
+gaze), the dwell timer fills on the highlighted key to select it.
 """
 
 from PyQt6.QtWidgets import QWidget
@@ -32,10 +33,15 @@ SPECIAL_KEYS = [
 
 class KeyboardWidget(QWidget):
     """
-    On-screen keyboard with gaze-driven dwell selection.
+    On-screen keyboard with step-based highlight navigation.
+    
+    The highlight moves one key at a time (like arrow keys) controlled by
+    the gaze zone. Dwell selects the highlighted key when the user looks
+    at center (stops navigating).
     
     Signals:
-        key_pressed(str): emitted when a letter/action key is selected via dwell
+        key_pressed(str): emitted when a letter key is selected via dwell
+        special_key_pressed(str): emitted for action keys (BACKSPACE, etc.)
     """
     
     key_pressed = pyqtSignal(str)
@@ -44,18 +50,26 @@ class KeyboardWidget(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         
+        # Build the navigation grid (2D list of key labels)
+        self._grid = [
+            list("QWERTYUIOP"),                         # row 0: 10 keys
+            list("ASDFGHJKL"),                          # row 1: 9 keys
+            list("ZXCVBNM"),                            # row 2: 7 keys
+            [label for label, _ in SPECIAL_KEYS],       # row 3: 6 keys
+        ]
+        
+        # Current highlight position
+        self._highlight_row = 0
+        self._highlight_col = 0
+        
         # Dwell configuration
         self._dwell_time_ms = 800  # milliseconds to dwell before selection
-        self._current_hover_key = None
-        self._dwell_start_time = 0
         self._dwell_progress = 0.0  # 0.0 to 1.0
-        
-        # Gaze position
-        self._gaze_x = 0.0
-        self._gaze_y = 0.0
+        self._navigating = False    # True when user is stepping (suppresses dwell)
         
         # Key geometry cache
         self._key_rects = {}  # key_label -> QRectF
+        self._grid_rects = []  # [row][col] -> QRectF (parallel to self._grid)
         
         # Visual state
         self._selected_key = None
@@ -63,7 +77,7 @@ class KeyboardWidget(QWidget):
         self._selected_flash_timer.setSingleShot(True)
         self._selected_flash_timer.timeout.connect(self._clear_selection_flash)
         
-        # Dwell timer
+        # Dwell timer (only advances when not navigating)
         self._dwell_timer = QTimer(self)
         self._dwell_timer.setInterval(16)  # ~60fps updates
         self._dwell_timer.timeout.connect(self._update_dwell)
@@ -86,83 +100,78 @@ class KeyboardWidget(QWidget):
         self._selected_color = QColor(60, 200, 120)
         self._special_key_color = QColor(45, 35, 60)
     
+    # ─── Grid Navigation ────────────────────────────────────────
+    
+    def get_grid(self):
+        """Return the 2D grid structure."""
+        return self._grid
+    
+    def get_row_count(self):
+        """Number of keyboard rows."""
+        return len(self._grid)
+    
+    def set_highlight(self, row, col):
+        """Set the highlighted key position. Use row=-1 to clear highlight."""
+        if row < 0 or col < 0:
+            self._highlight_row = -1
+            self._highlight_col = -1
+            self._dwell_progress = 0.0
+        else:
+            if self._highlight_row != row or self._highlight_col != col:
+                self._dwell_progress = 0.0  # reset dwell on position change
+            self._highlight_row = row
+            self._highlight_col = col
+        self.update()
+    
+    def get_highlight(self):
+        """Get the current (row, col) highlight position."""
+        return self._highlight_row, self._highlight_col
+    
+    def get_highlighted_key(self):
+        """Get the label of the currently highlighted key, or None."""
+        r, c = self._highlight_row, self._highlight_col
+        if 0 <= r < len(self._grid) and 0 <= c < len(self._grid[r]):
+            return self._grid[r][c]
+        return None
+    
+    def get_highlighted_rect(self):
+        """Get the QRectF of the highlighted key (in widget coords), or None."""
+        r, c = self._highlight_row, self._highlight_col
+        if 0 <= r < len(self._grid_rects) and 0 <= c < len(self._grid_rects[r]):
+            return self._grid_rects[r][c]
+        return None
+    
+    def set_navigating(self, is_navigating):
+        """Set whether the user is currently stepping through keys.
+        When navigating, dwell is suppressed."""
+        self._navigating = is_navigating
+        if is_navigating:
+            self._dwell_progress = 0.0
+    
+    # ─── Dwell & Selection ──────────────────────────────────────
+    
     def set_dwell_time(self, ms):
         """Set dwell time in milliseconds."""
         self._dwell_time_ms = max(300, min(3000, ms))
     
-    def update_gaze_position(self, screen_x, screen_y):
-        """Update the current gaze position (in widget coordinates)."""
-        self._gaze_x = screen_x
-        self._gaze_y = screen_y
-    
-    def _compute_key_rects(self):
-        """Compute key rectangles based on current widget size."""
-        self._key_rects.clear()
-        w, h = self.width(), self.height()
-        
-        padding = 6
-        total_rows = len(QWERTY_ROWS) + 1  # +1 for special keys row
-        
-        row_height = (h - padding * (total_rows + 1)) / total_rows
-        
-        for row_idx, row in enumerate(QWERTY_ROWS):
-            num_keys = len(row)
-            key_width = (w - padding * (num_keys + 1)) / num_keys
-            
-            # Center shorter rows
-            row_offset = (w - (key_width * num_keys + padding * (num_keys - 1))) / 2
-            
-            for col_idx, key in enumerate(row):
-                x = row_offset + col_idx * (key_width + padding)
-                y = padding + row_idx * (row_height + padding)
-                self._key_rects[key] = QRectF(x, y, key_width, row_height)
-        
-        # Special keys row
-        special_row_y = padding + len(QWERTY_ROWS) * (row_height + padding)
-        num_special = len(SPECIAL_KEYS)
-        special_key_width = (w - padding * (num_special + 1)) / num_special
-        
-        for i, (label, action) in enumerate(SPECIAL_KEYS):
-            x = padding + i * (special_key_width + padding)
-            self._key_rects[label] = QRectF(x, special_row_y, special_key_width, row_height)
-    
-    def _get_key_at_position(self, x, y):
-        """Find which key the given position falls on."""
-        for key, rect in self._key_rects.items():
-            if rect.contains(QPointF(x, y)):
-                return key
-        return None
-    
     def _update_dwell(self):
-        """Update dwell progress based on gaze position."""
-        # Map gaze to local widget coordinates
-        local_pos = self.mapFromGlobal(
-            self.window().mapToGlobal(
-                self.mapToParent(self.rect().topLeft())
-            )
-        )
-        
-        current_key = self._get_key_at_position(self._gaze_x, self._gaze_y)
-        
-        if current_key is None:
-            self._current_hover_key = None
+        """Advance dwell progress on the highlighted key (only when not navigating)."""
+        if self._navigating:
             self._dwell_progress = 0.0
             return
         
-        if current_key != self._current_hover_key:
-            # Gaze moved to a different key — reset dwell
-            self._current_hover_key = current_key
+        key = self.get_highlighted_key()
+        if key is None:
             self._dwell_progress = 0.0
             return
         
-        # Same key — advance dwell
-        increment = 16.0 / self._dwell_time_ms  # fraction per tick
+        # Advance dwell
+        increment = 16.0 / self._dwell_time_ms
         self._dwell_progress = min(1.0, self._dwell_progress + increment)
         
         if self._dwell_progress >= 1.0:
-            self._trigger_key(current_key)
+            self._trigger_key(key)
             self._dwell_progress = 0.0
-            self._current_hover_key = None
     
     def _trigger_key(self, key):
         """Handle key selection after dwell completes."""
@@ -182,12 +191,43 @@ class KeyboardWidget(QWidget):
         """Clear the green flash after selection."""
         self._selected_key = None
     
+    # ─── Geometry ───────────────────────────────────────────────
+    
+    def _compute_key_rects(self):
+        """Compute key rectangles based on current widget size."""
+        self._key_rects.clear()
+        self._grid_rects = []
+        w, h = self.width(), self.height()
+        
+        padding = 6
+        total_rows = len(self._grid)
+        row_height = (h - padding * (total_rows + 1)) / total_rows
+        
+        for row_idx, row in enumerate(self._grid):
+            row_rects = []
+            num_keys = len(row)
+            key_width = (w - padding * (num_keys + 1)) / num_keys
+            
+            # Center shorter rows
+            row_offset = (w - (key_width * num_keys + padding * (num_keys - 1))) / 2
+            
+            for col_idx, key in enumerate(row):
+                x = row_offset + col_idx * (key_width + padding)
+                y = padding + row_idx * (row_height + padding)
+                rect = QRectF(x, y, key_width, row_height)
+                self._key_rects[key] = rect
+                row_rects.append(rect)
+            
+            self._grid_rects.append(row_rects)
+    
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self._compute_key_rects()
     
+    # ─── Rendering ──────────────────────────────────────────────
+    
     def paintEvent(self, event):
-        """Render the keyboard."""
+        """Render the keyboard with highlighted key."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
@@ -199,47 +239,61 @@ class KeyboardWidget(QWidget):
         if not self._key_rects:
             self._compute_key_rects()
         
-        for key, rect in self._key_rects.items():
-            is_hovered = (key == self._current_hover_key)
-            is_selected = (key == self._selected_key)
-            is_special = key in [label for label, _ in SPECIAL_KEYS]
-            
-            # Key background
-            if is_selected:
-                bg = self._selected_color
-            elif is_hovered:
-                bg = self._key_hover_color
-            elif is_special:
-                bg = self._special_key_color
-            else:
-                bg = self._key_color
-            
-            # Draw rounded rectangle
-            path = QPainterPath()
-            path.addRoundedRect(rect, 12, 12)
-            
-            # Subtle gradient
-            gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-            gradient.setColorAt(0, bg.lighter(115))
-            gradient.setColorAt(1, bg)
-            painter.fillPath(path, gradient)
-            
-            # Key border
-            border_color = self._dwell_ring_color if is_hovered else QColor(60, 65, 85)
-            painter.setPen(QPen(border_color, 1.5 if is_hovered else 0.5))
-            painter.drawPath(path)
-            
-            # Key label
-            painter.setPen(self._key_text_color if not is_selected else QColor(10, 10, 10))
-            font_size = min(int(rect.height() * 0.35), 28)
-            if is_special:
-                font_size = min(int(rect.height() * 0.4), 32)
-            painter.setFont(QFont("Segoe UI", font_size, QFont.Weight.Medium))
-            painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, key)
-            
-            # Dwell progress ring
-            if is_hovered and self._dwell_progress > 0:
-                self._draw_dwell_ring(painter, rect, self._dwell_progress)
+        highlighted_key = self.get_highlighted_key()
+        
+        for row_idx, row in enumerate(self._grid):
+            for col_idx, key in enumerate(row):
+                rect = self._grid_rects[row_idx][col_idx]
+                is_highlighted = (row_idx == self._highlight_row and
+                                  col_idx == self._highlight_col)
+                is_selected = (key == self._selected_key)
+                is_special = key in [label for label, _ in SPECIAL_KEYS]
+                
+                # Key background
+                if is_selected:
+                    bg = self._selected_color
+                elif is_highlighted:
+                    bg = self._key_hover_color
+                elif is_special:
+                    bg = self._special_key_color
+                else:
+                    bg = self._key_color
+                
+                # Draw rounded rectangle
+                path = QPainterPath()
+                path.addRoundedRect(rect, 12, 12)
+                
+                # Subtle gradient
+                gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
+                gradient.setColorAt(0, bg.lighter(115))
+                gradient.setColorAt(1, bg)
+                painter.fillPath(path, gradient)
+                
+                # Key border — bright for highlighted key
+                if is_highlighted:
+                    border_color = self._dwell_ring_color
+                    border_width = 2.5
+                else:
+                    border_color = QColor(60, 65, 85)
+                    border_width = 0.5
+                painter.setPen(QPen(border_color, border_width))
+                painter.drawPath(path)
+                
+                # Key label
+                text_color = (QColor(10, 10, 10) if is_selected
+                              else QColor(255, 255, 255) if is_highlighted
+                              else self._key_text_color)
+                font_size = min(int(rect.height() * 0.35), 28)
+                if is_special:
+                    font_size = min(int(rect.height() * 0.4), 32)
+                weight = QFont.Weight.Bold if is_highlighted else QFont.Weight.Medium
+                painter.setFont(QFont("Segoe UI", font_size, weight))
+                painter.setPen(text_color)
+                painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, key)
+                
+                # Dwell progress ring on highlighted key
+                if is_highlighted and self._dwell_progress > 0 and not self._navigating:
+                    self._draw_dwell_ring(painter, rect, self._dwell_progress)
         
         painter.end()
     
@@ -273,12 +327,14 @@ class KeyboardWidget(QWidget):
             painter.setBrush(glow)
             painter.drawEllipse(QPointF(tip_x, tip_y), 8, 8)
     
-    def handle_mouse_click(self, key):
-        """Allow caregiver to click keys with mouse (fallback)."""
-        self._trigger_key(key)
+    # ─── Mouse fallback (caregiver mode) ────────────────────────
     
     def mousePressEvent(self, event):
         """Handle mouse clicks for caregiver mode."""
-        key = self._get_key_at_position(event.position().x(), event.position().y())
-        if key:
-            self._trigger_key(key)
+        pos = event.position()
+        for row_idx, row in enumerate(self._grid):
+            for col_idx, key in enumerate(row):
+                rect = self._grid_rects[row_idx][col_idx]
+                if rect.contains(QPointF(pos.x(), pos.y())):
+                    self._trigger_key(key)
+                    return

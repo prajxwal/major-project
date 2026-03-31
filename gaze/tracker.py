@@ -69,8 +69,9 @@ class GazeTracker(QThread):
         self._mutex = QMutex()
         
         # Horizontal calibration data (set by calibration module)
-        self._cal_left_x = None   # gaze ratio when looking fully left
-        self._cal_right_x = None  # gaze ratio when looking fully right
+        self._cal_left_x = None    # gaze ratio when looking fully left
+        self._cal_center_x = None  # gaze ratio when looking straight ahead
+        self._cal_right_x = None   # gaze ratio when looking fully right
         
         # Smoothing: exponential moving average
         self._smooth_x = 0.5
@@ -82,21 +83,23 @@ class GazeTracker(QThread):
         self._blink_in_progress = False
         
     def set_calibration(self, cal_data):
-        """Set the calibration data from 2-point horizontal calibration.
+        """Set the calibration data from 3-point horizontal calibration.
         
         Args:
-            cal_data: dict with 'left_x' and 'right_x' gaze ratios,
-                      or legacy np.ndarray (ignored, forces recalibration).
+            cal_data: dict with 'left_x', 'center_x', and 'right_x' gaze ratios.
         """
         self._mutex.lock()
         if isinstance(cal_data, dict):
             self._cal_left_x = cal_data.get('left_x')
+            self._cal_center_x = cal_data.get('center_x')
             self._cal_right_x = cal_data.get('right_x')
-            print(f"[GazeTracker] ✓ Horizontal calibration set: "
-                  f"left={self._cal_left_x:.3f}, right={self._cal_right_x:.3f}")
+            print(f"[GazeTracker] ✓ Calibration set: "
+                  f"left={self._cal_left_x:.3f}, "
+                  f"center={self._cal_center_x:.3f}, "
+                  f"right={self._cal_right_x:.3f}")
         else:
-            # Legacy matrix format — ignore
             self._cal_left_x = None
+            self._cal_center_x = None
             self._cal_right_x = None
         self._mutex.unlock()
         

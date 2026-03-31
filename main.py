@@ -87,18 +87,31 @@ class GazeSpeakApp(QMainWindow):
         self._blink_alert = BlinkAlertManager()
         
         # Abbreviation mode tracking
-        self._abbrev_mode = False  # True when showing abbreviation expansions
+        self._abbrev_mode = False
+        
+        # ─── Step-based navigation state ───
+        self._nav_area = "keyboard"   # "keyboard" or "predictions"
+        self._key_row = 0
+        self._key_col = 0
+        self._pred_index = 0
+        self._current_zone = "CENTER"  # "LEFT", "CENTER", "RIGHT"
+        self._step_count = 0
+        
+        # Gaze zone thresholds (calibrated 0.0–1.0)
+        self._zone_left = 0.30
+        self._zone_right = 0.70
+        
+        # Step timing
+        self._step_timer = QTimer(self)
+        self._step_timer.timeout.connect(self._do_gaze_step)
+        self._step_initial_delay = 450   # ms before first repeat
+        self._step_repeat_delay = 300    # ms between subsequent steps
         
         # Build UI
         self._setup_ui()
         self._connect_signals()
         
-        # Load saved calibration or start fresh
-        saved_cal = CalibrationScreen.load_calibration()
-        if saved_cal is not None:
-            self._tracker.set_calibration(saved_cal)
-        
-        # Start gaze tracking
+        # Start gaze tracking (calibration will be triggered after window shows)
         self._tracker.start()
         
         # Apply dark theme
@@ -106,6 +119,9 @@ class GazeSpeakApp(QMainWindow):
         
         # Set up alert notification UI callback
         self._blink_alert.set_alert_callback(self._show_alert_notification)
+        
+        # Initialize keyboard highlight
+        self._keyboard.set_highlight(0, 0)
     
     def _setup_ui(self):
         """Build the main UI layout."""
@@ -205,26 +221,34 @@ class GazeSpeakApp(QMainWindow):
         self._context_bar.context_submitted.connect(self._on_caretaker_context)
     
     def _on_gaze_updated(self, gaze_x, gaze_y, confidence):
-        """Handle gaze position updates from the tracker."""
-        # Map normalized gaze (0-1) to window coordinates
-        wx = gaze_x * self.width()
-        wy = gaze_y * self.height()
+        """Handle gaze updates — zone-based step navigation."""
+        # Determine horizontal zone
+        if gaze_x < self._zone_left:
+            new_zone = "LEFT"
+        elif gaze_x > self._zone_right:
+            new_zone = "RIGHT"
+        else:
+            new_zone = "CENTER"
         
-        # Update all gaze-aware widgets
-        self._gaze_cursor.update_position(wx, wy, confidence)
+        if new_zone != self._current_zone:
+            self._current_zone = new_zone
+            self._step_count = 0
+            
+            if new_zone in ("LEFT", "RIGHT"):
+                # Entering a navigation zone — step once immediately
+                self._keyboard.set_navigating(True)
+                self._prediction_bar.set_navigating(True)
+                self._do_gaze_step()
+                # Start repeat timer
+                self._step_timer.start(self._step_initial_delay)
+            else:
+                # Returned to CENTER — stop stepping, enable dwell
+                self._step_timer.stop()
+                self._keyboard.set_navigating(False)
+                self._prediction_bar.set_navigating(False)
         
-        # Map to keyboard widget coordinates
-        kb_pos = self._keyboard.mapFrom(self.centralWidget(), QPoint(int(wx), int(wy)))
-        self._keyboard.update_gaze_position(kb_pos.x(), kb_pos.y())
-        
-        # Map to prediction bar
-        pred_pos = self._prediction_bar.mapFrom(self.centralWidget(), QPoint(int(wx), int(wy)))
-        self._prediction_bar.update_gaze_position(pred_pos.x(), pred_pos.y())
-        
-        # Map to quick phrases (if visible)
-        if self._stacked.currentIndex() == 1:
-            qp_pos = self._quick_phrases.mapFrom(self.centralWidget(), QPoint(int(wx), int(wy)))
-            self._quick_phrases.update_gaze_position(qp_pos.x(), qp_pos.y())
+        # Snap the gaze cursor to the highlighted item's center
+        self._snap_cursor_to_highlight(confidence)
         
         # Feed raw data to calibration screen if active
         if self._calibration.isVisible():
@@ -240,6 +264,121 @@ class GazeSpeakApp(QMainWindow):
         else:
             self._status_indicator.setText("● Low")
             self._status_indicator.setStyleSheet("color: #f06040; padding: 8px;")
+    
+    def _do_gaze_step(self):
+        """Execute one navigation step in the current direction."""
+        self._step_count += 1
+        direction = 1 if self._current_zone == "RIGHT" else -1
+        
+        if self._nav_area == "predictions":
+            self._step_prediction(direction)
+        else:
+            self._step_keyboard(direction)
+        
+        # After first step, switch to faster repeat rate
+        if self._step_count == 1:
+            self._step_timer.start(self._step_repeat_delay)
+    
+    def _step_keyboard(self, direction):
+        """Step the keyboard highlight left (-1) or right (+1) with row wrapping."""
+        grid = self._keyboard.get_grid()
+        row, col = self._key_row, self._key_col
+        
+        col += direction
+        
+        if col >= len(grid[row]):
+            # Past end of row → next row
+            row += 1
+            col = 0
+            if row >= len(grid):
+                # Past last keyboard row → wrap to predictions (if any)
+                if self._prediction_bar.get_count() > 0:
+                    self._nav_area = "predictions"
+                    self._pred_index = 0
+                    self._keyboard.set_highlight(-1, -1)
+                    self._prediction_bar.set_highlight(0)
+                    return
+                else:
+                    row = 0  # wrap to first keyboard row
+        
+        elif col < 0:
+            # Past start of row → previous row
+            row -= 1
+            if row < 0:
+                # Past first keyboard row → wrap to predictions (if any)
+                if self._prediction_bar.get_count() > 0:
+                    self._nav_area = "predictions"
+                    self._pred_index = self._prediction_bar.get_count() - 1
+                    self._keyboard.set_highlight(-1, -1)
+                    self._prediction_bar.set_highlight(self._pred_index)
+                    return
+                else:
+                    row = len(grid) - 1  # wrap to last keyboard row
+            col = len(grid[row]) - 1
+        
+        self._key_row = row
+        self._key_col = col
+        self._keyboard.set_highlight(row, col)
+        self._prediction_bar.set_highlight(-1)
+    
+    def _step_prediction(self, direction):
+        """Step the prediction bar highlight left (-1) or right (+1)."""
+        count = self._prediction_bar.get_count()
+        if count == 0:
+            # No predictions — jump to keyboard
+            self._nav_area = "keyboard"
+            self._keyboard.set_highlight(self._key_row, self._key_col)
+            return
+        
+        idx = self._pred_index + direction
+        
+        if idx >= count:
+            # Past last prediction → jump to keyboard row 0, col 0
+            self._nav_area = "keyboard"
+            self._key_row = 0
+            self._key_col = 0
+            self._keyboard.set_highlight(0, 0)
+            self._prediction_bar.set_highlight(-1)
+            return
+        
+        if idx < 0:
+            # Past first prediction → jump to keyboard last row, last col
+            self._nav_area = "keyboard"
+            grid = self._keyboard.get_grid()
+            self._key_row = len(grid) - 1
+            self._key_col = len(grid[self._key_row]) - 1
+            self._keyboard.set_highlight(self._key_row, self._key_col)
+            self._prediction_bar.set_highlight(-1)
+            return
+        
+        self._pred_index = idx
+        self._prediction_bar.set_highlight(idx)
+        self._keyboard.set_highlight(-1, -1)
+    
+    def _snap_cursor_to_highlight(self, confidence):
+        """Snap the visual gaze cursor to the center of the highlighted item."""
+        rect = None
+        widget = None
+        
+        if self._nav_area == "predictions":
+            rect = self._prediction_bar.get_highlighted_rect()
+            widget = self._prediction_bar
+        else:
+            rect = self._keyboard.get_highlighted_rect()
+            widget = self._keyboard
+        
+        if rect is not None and widget is not None:
+            # Convert rect center to main window coordinates
+            center = rect.center()
+            global_pos = widget.mapTo(self.centralWidget(), QPoint(int(center.x()), int(center.y())))
+            self._gaze_cursor.update_position(
+                float(global_pos.x()), float(global_pos.y()), confidence
+            )
+        else:
+            # Fallback — keep cursor at center
+            self._gaze_cursor.update_position(
+                self.width() / 2, self.height() / 2, confidence * 0.3
+            )
     
     def _on_tracking_lost(self):
         """Handle loss of face/eye tracking."""
@@ -343,8 +482,31 @@ class GazeSpeakApp(QMainWindow):
         self._calibration.start_calibration()
     
     def _on_calibration_complete(self, cal_data):
-        """Apply the new horizontal calibration data."""
+        """Apply calibration and compute zone thresholds from center_x."""
         self._tracker.set_calibration(cal_data)
+        
+        # Use the calibrated center point to define zone boundaries
+        # center_x is in calibrated space (0.0-1.0 after mapping)
+        if isinstance(cal_data, dict) and 'center_x' in cal_data:
+            left_x = cal_data['left_x']
+            center_x = cal_data['center_x']
+            right_x = cal_data['right_x']
+            span = right_x - left_x
+            
+            if abs(span) > 0.01:
+                # Map center to 0.0-1.0 range
+                center_norm = (center_x - left_x) / span
+                center_norm = max(0.2, min(0.8, center_norm))
+                
+                # Build dead zone around center (±15% of range)
+                margin = 0.15
+                self._zone_left = center_norm - margin
+                self._zone_right = center_norm + margin
+                
+                print(f"[GazeSpeak] Zone thresholds: "
+                      f"LEFT < {self._zone_left:.2f} | "
+                      f"CENTER {self._zone_left:.2f}-{self._zone_right:.2f} | "
+                      f"RIGHT > {self._zone_right:.2f}")
     
     def _apply_theme(self):
         """Apply the dark theme to the entire application."""
@@ -429,9 +591,8 @@ def main():
     window = GazeSpeakApp()
     window.show()
     
-    # Show calibration on first run (if no saved calibration)
-    if CalibrationScreen.load_calibration() is None:
-        QTimer.singleShot(1000, window._start_calibration)
+    # Always run calibration on startup
+    QTimer.singleShot(1000, window._start_calibration)
     
     sys.exit(app.exec())
 

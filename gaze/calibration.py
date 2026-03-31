@@ -1,12 +1,11 @@
 """
-gaze/calibration.py — 2-point horizontal calibration for eye gaze tracking.
+gaze/calibration.py — 3-point horizontal calibration for eye gaze tracking.
 
-Simple left/right calibration: the user looks fully left and fully right
-to establish baseline gaze extremes. The horizontal iris ratio range is
-then linearly mapped to screen X position (0.0 → 1.0).
+The user looks at 3 dots: LEFT, CENTER, RIGHT.
+- LEFT and RIGHT establish the gaze extremes for horizontal mapping.
+- CENTER establishes the "neutral" zone where dwell selection happens.
 
-This replaces the old 9-point affine calibration with a more stable,
-jitter-resistant approach that only tracks horizontal eye movement.
+This runs on every startup to ensure fresh, accurate calibration.
 """
 
 import json
@@ -23,13 +22,13 @@ CALIBRATION_FILE = os.path.join(CALIBRATION_DIR, "calibration.json")
 
 class CalibrationScreen(QWidget):
     """
-    Full-screen overlay for 2-point horizontal calibration.
+    Full-screen overlay for 3-point horizontal calibration.
     
-    Phase 1: "Look at the LEFT dot" → records gaze_x when looking left
-    Phase 2: "Look at the RIGHT dot" → records gaze_x when looking right
+    Phase 1: "Look LEFT"   → records gaze_x when looking left
+    Phase 2: "Look CENTER"  → records gaze_x when looking straight ahead
+    Phase 3: "Look RIGHT"  → records gaze_x when looking right
     
-    Result: a simple dict { "left_x": float, "right_x": float }
-    that the tracker uses for linear horizontal mapping.
+    Result: dict { "left_x", "center_x", "right_x" }
     
     Signals:
         calibration_complete(object): emitted with calibration data dict
@@ -42,8 +41,9 @@ class CalibrationScreen(QWidget):
     # Calibration phases
     PHASE_INTRO = 0
     PHASE_LEFT = 1
-    PHASE_RIGHT = 2
-    PHASE_DONE = 3
+    PHASE_CENTER = 2
+    PHASE_RIGHT = 3
+    PHASE_DONE = 4
     
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -53,13 +53,11 @@ class CalibrationScreen(QWidget):
         
         # Calibration state
         self._phase = self.PHASE_INTRO
-        self._samples_per_point = 45  # frames to average (1.5 sec at 30fps)
+        self._samples_per_point = 45  # ~1.5 sec at 30fps
         self._current_samples = []
         self._left_gaze_x = 0.0
+        self._center_gaze_x = 0.0
         self._right_gaze_x = 0.0
-        
-        # Vertical calibration (fixed center, slight vertical mapping)
-        self._vertical_center = 0.5
         
         # Animation
         self._dot_radius = 24
@@ -98,10 +96,10 @@ class CalibrationScreen(QWidget):
         self._collecting = False
         self._progress = 0.0
         
-        self._instruction_label.setText("Horizontal Gaze Calibration")
+        self._instruction_label.setText("Gaze Calibration")
         self._sub_label.setText(
-            "You will look at 2 dots: LEFT and RIGHT\n"
-            "This maps your eye movement to the screen cursor\n\n"
+            "You will look at 3 dots: LEFT, CENTER, and RIGHT\n"
+            "This maps your eye movement to the keyboard\n\n"
             "Press SPACE to start"
         )
         self._progress_label.setText("")
@@ -109,11 +107,10 @@ class CalibrationScreen(QWidget):
         self._anim_timer.start()
     
     def _reposition_labels(self):
-        """Position labels on screen."""
         w, h = self.width(), self.height()
-        self._instruction_label.setGeometry(0, int(h * 0.30), w, 50)
-        self._sub_label.setGeometry(0, int(h * 0.30) + 60, w, 120)
-        self._progress_label.setGeometry(0, int(h * 0.30) + 190, w, 30)
+        self._instruction_label.setGeometry(0, int(h * 0.25), w, 50)
+        self._sub_label.setGeometry(0, int(h * 0.25) + 60, w, 120)
+        self._progress_label.setGeometry(0, int(h * 0.25) + 190, w, 30)
     
     def receive_gaze_sample(self, gaze_x, gaze_y, confidence):
         """Called by the gaze tracker with each frame's iris ratios."""
@@ -136,17 +133,22 @@ class CalibrationScreen(QWidget):
         if phase == self.PHASE_LEFT:
             self._instruction_label.setText("👈  Look at the LEFT dot")
             self._sub_label.setText("Keep your gaze steady on the dot...")
-            self._progress_label.setText("Collecting...")
+            self._progress_label.setText("Step 1 of 3")
+            QTimer.singleShot(800, self._begin_collecting)
+            
+        elif phase == self.PHASE_CENTER:
+            self._instruction_label.setText("👁  Look at the CENTER dot")
+            self._sub_label.setText("Look straight ahead at the center dot...")
+            self._progress_label.setText("Step 2 of 3")
             QTimer.singleShot(800, self._begin_collecting)
             
         elif phase == self.PHASE_RIGHT:
             self._instruction_label.setText("Look at the RIGHT dot  👉")
             self._sub_label.setText("Keep your gaze steady on the dot...")
-            self._progress_label.setText("Collecting...")
+            self._progress_label.setText("Step 3 of 3")
             QTimer.singleShot(800, self._begin_collecting)
     
     def _begin_collecting(self):
-        """Start collecting samples after a brief settling delay."""
         self._collecting = True
         self._current_samples = []
     
@@ -159,53 +161,55 @@ class CalibrationScreen(QWidget):
             self._phase = self.PHASE_INTRO
             return
         
-        # Use trimmed mean (remove outliers)
+        # Trimmed mean (remove outliers)
         sorted_samples = sorted(self._current_samples)
-        trim = max(1, len(sorted_samples) // 5)  # trim 20% from each end
+        trim = max(1, len(sorted_samples) // 5)
         trimmed = sorted_samples[trim:-trim] if trim < len(sorted_samples) // 2 else sorted_samples
         avg_x = np.mean(trimmed)
         
         if self._phase == self.PHASE_LEFT:
             self._left_gaze_x = avg_x
-            self._progress_label.setText(f"✓ Left point captured (ratio: {avg_x:.3f})")
-            QTimer.singleShot(1200, lambda: self._start_phase(self.PHASE_RIGHT))
+            self._progress_label.setText(f"✓ Left captured ({avg_x:.3f})")
+            QTimer.singleShot(1000, lambda: self._start_phase(self.PHASE_CENTER))
+            
+        elif self._phase == self.PHASE_CENTER:
+            self._center_gaze_x = avg_x
+            self._progress_label.setText(f"✓ Center captured ({avg_x:.3f})")
+            QTimer.singleShot(1000, lambda: self._start_phase(self.PHASE_RIGHT))
             
         elif self._phase == self.PHASE_RIGHT:
             self._right_gaze_x = avg_x
-            self._progress_label.setText(f"✓ Right point captured (ratio: {avg_x:.3f})")
+            self._progress_label.setText(f"✓ Right captured ({avg_x:.3f})")
             QTimer.singleShot(1000, self._compute_calibration)
     
     def _compute_calibration(self):
-        """Compute and save the horizontal calibration data."""
-        # Validate: left and right ratios must be meaningfully different
+        """Compute and validate the 3-point calibration."""
         spread = abs(self._right_gaze_x - self._left_gaze_x)
         
         if spread < 0.05:
             self._instruction_label.setText("Calibration failed — not enough range")
             self._sub_label.setText(
                 f"Left: {self._left_gaze_x:.3f}, Right: {self._right_gaze_x:.3f}\n"
-                "The difference is too small. Try looking further left/right.\n\n"
-                "Press SPACE to retry"
+                "Try looking further left/right.\n\nPress SPACE to retry"
             )
             self._phase = self.PHASE_INTRO
             return
         
         calibration_data = {
             "left_x": float(self._left_gaze_x),
+            "center_x": float(self._center_gaze_x),
             "right_x": float(self._right_gaze_x),
-            "vertical_center": float(self._vertical_center),
-            "type": "horizontal_2point",
+            "type": "horizontal_3point",
         }
         
-        # Save to disk
         self._save_calibration(calibration_data)
         
         self._phase = self.PHASE_DONE
         self._instruction_label.setText("✓ Calibration Complete!")
         self._sub_label.setText(
-            f"Left gaze ratio: {self._left_gaze_x:.3f}\n"
-            f"Right gaze ratio: {self._right_gaze_x:.3f}\n"
-            f"Range: {spread:.3f}"
+            f"Left: {self._left_gaze_x:.3f}  |  "
+            f"Center: {self._center_gaze_x:.3f}  |  "
+            f"Right: {self._right_gaze_x:.3f}"
         )
         self._progress_label.setText("Starting in 2 seconds...")
         self._anim_timer.stop()
@@ -214,86 +218,74 @@ class CalibrationScreen(QWidget):
         QTimer.singleShot(2000, lambda: self._finish(calibration_data))
     
     def _finish(self, cal_data):
-        """Close calibration screen and emit result."""
         self.hide()
         self.calibration_complete.emit(cal_data)
     
     def _save_calibration(self, cal_data):
-        """Save calibration data to disk."""
         os.makedirs(CALIBRATION_DIR, exist_ok=True)
         with open(CALIBRATION_FILE, "w") as f:
             json.dump(cal_data, f, indent=2)
     
     @staticmethod
     def load_calibration():
-        """Load saved calibration data from disk, or return None."""
-        if os.path.exists(CALIBRATION_FILE):
-            try:
-                with open(CALIBRATION_FILE, "r") as f:
-                    data = json.load(f)
-                # Support both old matrix format and new horizontal format
-                if "type" in data and data["type"] == "horizontal_2point":
-                    return data
-                elif "matrix" in data:
-                    # Old format — return None to force recalibration
-                    return None
-                return data
-            except (json.JSONDecodeError, KeyError, ValueError):
-                return None
+        """Load saved calibration — returns None to force fresh calibration."""
+        # We always recalibrate on startup, so return None
         return None
     
     def _animate(self):
-        """Animation tick."""
         self._pulse_phase += 0.08
         self.update()
     
     def paintEvent(self, event):
-        """Draw the calibration dots and progress."""
+        """Draw the 3 calibration dots."""
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         
         w, h = self.width(), self.height()
-        
-        # Background
         painter.fillRect(0, 0, w, h, QColor(10, 10, 15))
         
-        if self._phase == self.PHASE_INTRO or self._phase == self.PHASE_DONE:
+        if self._phase in (self.PHASE_INTRO, self.PHASE_DONE):
             painter.end()
             return
         
         pulse = 0.5 + 0.5 * np.sin(self._pulse_phase)
         
-        # Dot positions
-        left_x, left_y = int(w * 0.08), int(h * 0.5)
-        right_x, right_y = int(w * 0.92), int(h * 0.5)
+        # 3 dot positions
+        left_x, dot_y = int(w * 0.08), int(h * 0.5)
+        center_x = int(w * 0.50)
+        right_x = int(w * 0.92)
         
-        # Draw the LEFT dot
-        self._draw_dot(painter, left_x, left_y, pulse,
-                       active=(self._phase == self.PHASE_LEFT),
-                       done=(self._phase == self.PHASE_RIGHT or self._phase == self.PHASE_DONE))
+        # Determine which dots are done
+        left_done = self._phase in (self.PHASE_CENTER, self.PHASE_RIGHT, self.PHASE_DONE)
+        center_done = self._phase in (self.PHASE_RIGHT, self.PHASE_DONE)
         
-        # Draw the RIGHT dot
-        self._draw_dot(painter, right_x, right_y, pulse,
-                       active=(self._phase == self.PHASE_RIGHT),
-                       done=False)
+        # Draw dots
+        self._draw_dot(painter, left_x, dot_y, pulse,
+                       active=(self._phase == self.PHASE_LEFT), done=left_done)
+        self._draw_dot(painter, center_x, dot_y, pulse,
+                       active=(self._phase == self.PHASE_CENTER), done=center_done)
+        self._draw_dot(painter, right_x, dot_y, pulse,
+                       active=(self._phase == self.PHASE_RIGHT), done=False)
         
-        # Draw connecting line between dots
+        # Connecting line
         painter.setPen(QPen(QColor(40, 44, 65), 2, Qt.PenStyle.DashLine))
-        painter.drawLine(left_x + 35, left_y, right_x - 35, right_y)
+        painter.drawLine(left_x + 35, dot_y, right_x - 35, dot_y)
         
-        # Draw progress arc on active dot
+        # Progress arc on active dot
         if self._collecting and self._progress > 0:
-            active_x = left_x if self._phase == self.PHASE_LEFT else right_x
-            active_y = left_y if self._phase == self.PHASE_LEFT else right_y
-            self._draw_progress_arc(painter, active_x, active_y, self._progress)
+            if self._phase == self.PHASE_LEFT:
+                ax = left_x
+            elif self._phase == self.PHASE_CENTER:
+                ax = center_x
+            else:
+                ax = right_x
+            self._draw_progress_arc(painter, ax, dot_y, self._progress)
         
         painter.end()
     
     def _draw_dot(self, painter, cx, cy, pulse, active=False, done=False):
-        """Draw a calibration target dot."""
         glow_radius = int(self._dot_radius + 12 * pulse) if active else self._dot_radius
         
-        # Outer glow
         gradient = QRadialGradient(cx, cy, glow_radius + 10)
         if done:
             gradient.setColorAt(0, QColor(80, 200, 120, 180))
@@ -312,19 +304,17 @@ class CalibrationScreen(QWidget):
         painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(QPoint(cx, cy), glow_radius + 10, glow_radius + 10)
         
-        # Inner core
         if done:
-            core_color = QColor(80, 220, 120)
+            core = QColor(80, 220, 120)
         elif active:
-            core_color = QColor(120, 180, 255)
+            core = QColor(120, 180, 255)
         else:
-            core_color = QColor(80, 85, 110)
+            core = QColor(80, 85, 110)
         
-        painter.setBrush(core_color)
+        painter.setBrush(core)
         painter.drawEllipse(QPoint(cx, cy), self._dot_radius // 2, self._dot_radius // 2)
     
     def _draw_progress_arc(self, painter, cx, cy, progress):
-        """Draw collection progress arc around the active dot."""
         radius = self._dot_radius + 8
         span = int(progress * 360 * 16)
         
@@ -338,7 +328,6 @@ class CalibrationScreen(QWidget):
         painter.drawArc(arc_rect, 90 * 16, -span)
     
     def keyPressEvent(self, event):
-        """Handle key presses during calibration."""
         if event.key() == Qt.Key.Key_Escape:
             self._anim_timer.stop()
             self._collecting = False
@@ -349,6 +338,5 @@ class CalibrationScreen(QWidget):
                 self._start_phase(self.PHASE_LEFT)
     
     def resizeEvent(self, event):
-        """Handle window resize."""
         super().resizeEvent(event)
         self._reposition_labels()
