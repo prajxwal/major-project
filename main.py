@@ -32,8 +32,10 @@ from ui.prediction_bar import PredictionBar
 from ui.quick_phrases import QuickPhrasesPanel
 from ui.settings_panel import SettingsPanel
 from ui.context_bar import ContextBar
+from ui.conversation_panel import ConversationPanel
 from prediction.predictor import WordPredictor
 from prediction.abbreviation_expander import AbbreviationExpander
+from prediction.conversation_engine import ConversationEngine
 from alerts.blink_alert import BlinkAlertManager
 
 
@@ -83,8 +85,15 @@ class GazeSpeakApp(QMainWindow):
         self._tracker = GazeTracker()
         self._predictor = WordPredictor()
         self._abbreviation_expander = AbbreviationExpander()
+        self._conversation_engine = ConversationEngine()
         self._calibration = CalibrationScreen()
         self._blink_alert = BlinkAlertManager()
+        
+        # Track whether this is the initial startup (calibration before app shows)
+        self._initial_startup = True
+        
+        # Conversation mode tracking
+        self._conversation_mode = False
         
         # Abbreviation mode tracking
         self._abbrev_mode = False
@@ -111,17 +120,13 @@ class GazeSpeakApp(QMainWindow):
         self._setup_ui()
         self._connect_signals()
         
-        # Start gaze tracking (calibration will be triggered after window shows)
-        self._tracker.start()
+        # Do NOT start tracker here — it starts just before calibration
         
         # Apply dark theme
         self._apply_theme()
         
         # Set up alert notification UI callback
         self._blink_alert.set_alert_callback(self._show_alert_notification)
-        
-        # Initialize keyboard highlight
-        self._keyboard.set_highlight(0, 0)
     
     def _setup_ui(self):
         """Build the main UI layout."""
@@ -160,16 +165,18 @@ class GazeSpeakApp(QMainWindow):
         self._prediction_bar = PredictionBar()
         main_layout.addWidget(self._prediction_bar)
         
-        # --- Stacked area: Keyboard / Quick Phrases / Settings ---
+        # --- Stacked area: Keyboard / Quick Phrases / Settings / Conversation ---
         self._stacked = QStackedWidget()
         
         self._keyboard = KeyboardWidget()
         self._quick_phrases = QuickPhrasesPanel()
         self._settings = SettingsPanel()
+        self._conversation_panel = ConversationPanel()
         
-        self._stacked.addWidget(self._keyboard)       # index 0
-        self._stacked.addWidget(self._quick_phrases)   # index 1
-        self._stacked.addWidget(self._settings)        # index 2
+        self._stacked.addWidget(self._keyboard)            # index 0
+        self._stacked.addWidget(self._quick_phrases)        # index 1
+        self._stacked.addWidget(self._settings)             # index 2
+        self._stacked.addWidget(self._conversation_panel)   # index 3
         
         main_layout.addWidget(self._stacked, stretch=1)
         
@@ -195,6 +202,7 @@ class GazeSpeakApp(QMainWindow):
         
         # Calibration
         self._calibration.calibration_complete.connect(self._on_calibration_complete)
+        self._calibration.calibration_cancelled.connect(self._on_calibration_cancelled)
         
         # Keyboard → sentence bar
         self._keyboard.key_pressed.connect(self._on_key_pressed)
@@ -219,9 +227,26 @@ class GazeSpeakApp(QMainWindow):
         
         # Caretaker context bar
         self._context_bar.context_submitted.connect(self._on_caretaker_context)
+        self._context_bar.end_conversation_requested.connect(self._on_conversation_type_instead)
+        
+        # Conversation panel
+        self._conversation_panel.answer_selected.connect(self._on_conversation_answer)
+        self._conversation_panel.more_options_requested.connect(self._on_conversation_more)
+        self._conversation_panel.type_instead_requested.connect(self._on_conversation_type_instead)
+        self._conversation_panel.back_requested.connect(self._on_conversation_back)
+        self._conversation_panel.speak_now_requested.connect(self._on_conversation_speak_now)
     
     def _on_gaze_updated(self, gaze_x, gaze_y, confidence):
         """Handle gaze updates — zone-based step navigation."""
+        # Feed raw data to calibration screen if active — skip navigation
+        if self._calibration.isVisible():
+            self._calibration.receive_gaze_sample(gaze_x, gaze_y, confidence)
+            return
+        
+        # Skip navigation if the main window isn't visible yet
+        if not self.isVisible():
+            return
+        
         # Determine horizontal zone
         if gaze_x < self._zone_left:
             new_zone = "LEFT"
@@ -230,6 +255,15 @@ class GazeSpeakApp(QMainWindow):
         else:
             new_zone = "CENTER"
         
+        # ─── Conversation mode: feed zone to conversation panel ───
+        if self._conversation_mode and self._stacked.currentIndex() == 3:
+            self._conversation_panel.set_zone(new_zone)
+            self._current_zone = new_zone
+            # Update tracking status and return (no keyboard navigation)
+            self._update_tracking_status(confidence)
+            return
+        
+        # ─── Keyboard navigation mode ───
         if new_zone != self._current_zone:
             self._current_zone = new_zone
             self._step_count = 0
@@ -250,11 +284,11 @@ class GazeSpeakApp(QMainWindow):
         # Snap the gaze cursor to the highlighted item's center
         self._snap_cursor_to_highlight(confidence)
         
-        # Feed raw data to calibration screen if active
-        if self._calibration.isVisible():
-            self._calibration.receive_gaze_sample(gaze_x, gaze_y, confidence)
-        
         # Update tracking status
+        self._update_tracking_status(confidence)
+    
+    def _update_tracking_status(self, confidence):
+        """Update the tracking status indicator."""
         if confidence > 0.5:
             self._status_indicator.setText("● Tracking")
             self._status_indicator.setStyleSheet("color: #50c878; padding: 8px;")
@@ -463,9 +497,115 @@ class GazeSpeakApp(QMainWindow):
         QTimer.singleShot(0, lambda: self._prediction_bar.set_predictions(expansions))
     
     def _on_caretaker_context(self, question):
-        """Handle caretaker question submission — sets context for abbreviation expander."""
+        """Handle caretaker question — start conversation mode with LLM options."""
         self._abbreviation_expander.set_caretaker_context(question)
         print(f"[GazeSpeak] Caretaker context set: '{question}'")
+        
+        # Switch to conversation mode
+        self._conversation_mode = True
+        self._context_bar.set_conversation_active(True)
+        self._conversation_panel.set_loading(question, [])
+        self._stacked.setCurrentIndex(3)  # show conversation panel
+        
+        # Generate answer options via LLM
+        self._conversation_engine.start_conversation(
+            question,
+            callback=self._on_conversation_options_ready,
+        )
+    
+    # ─── Conversation mode handlers ─────────────────────────────
+    
+    def _on_conversation_options_ready(self, result):
+        """Handle LLM-generated answer options (called from background thread)."""
+        QTimer.singleShot(0, lambda: self._apply_conversation_options(result))
+    
+    def _apply_conversation_options(self, result):
+        """Apply conversation options on the UI thread."""
+        if result.get('is_final'):
+            # LLM decided the response is complete
+            composed = result.get('composed_response', '')
+            self._conversation_panel.set_final_response(
+                composed,
+                self._conversation_engine.current_question,
+                self._conversation_engine.selections,
+            )
+            # Auto-speak the response
+            self._sentence_bar.speak_text(composed)
+            self._conversation_engine.record_final_response(composed)
+            print(f"[GazeSpeak] Final response: '{composed}'")
+        else:
+            # Show the two options
+            self._conversation_panel.set_options(
+                left=result.get('left', 'Yes'),
+                right=result.get('right', 'No'),
+                question=self._conversation_engine.current_question,
+                selections=self._conversation_engine.selections,
+            )
+    
+    def _on_conversation_answer(self, chosen_text):
+        """Handle patient selecting an answer card."""
+        print(f"[GazeSpeak] Patient selected: '{chosen_text}'")
+        
+        # Show loading while generating follow-up
+        self._conversation_panel.set_loading(
+            self._conversation_engine.current_question,
+            self._conversation_engine.selections + [chosen_text],
+        )
+        
+        # Ask engine to generate follow-up options
+        self._conversation_engine.select_option(
+            chosen_text,
+            callback=self._on_conversation_options_ready,
+        )
+    
+    def _on_conversation_more(self):
+        """Handle 'More Options' request."""
+        self._conversation_panel.set_loading(
+            self._conversation_engine.current_question,
+            self._conversation_engine.selections,
+        )
+        self._conversation_engine.request_more_options(
+            callback=self._on_conversation_options_ready,
+        )
+    
+    def _on_conversation_type_instead(self):
+        """Switch from conversation mode back to keyboard."""
+        self._conversation_mode = False
+        self._conversation_panel.clear()
+        self._context_bar.set_conversation_active(False)
+        self._stacked.setCurrentIndex(0)
+        print("[GazeSpeak] Switched to keyboard mode")
+    
+    def _on_conversation_back(self):
+        """Undo the last selection in the conversation."""
+        removed = self._conversation_engine.undo_last_selection()
+        if removed:
+            print(f"[GazeSpeak] Undid selection: '{removed}'")
+            # Regenerate options for the previous step
+            self._conversation_panel.set_loading(
+                self._conversation_engine.current_question,
+                self._conversation_engine.selections,
+            )
+            self._conversation_engine.request_more_options(
+                callback=self._on_conversation_options_ready,
+            )
+        else:
+            # Nothing to undo — go back to keyboard
+            self._on_conversation_type_instead()
+    
+    def _on_conversation_speak_now(self):
+        """Compose and speak the response from selections so far."""
+        selections = self._conversation_engine.selections
+        if selections:
+            self._conversation_panel.set_loading(
+                self._conversation_engine.current_question,
+                selections,
+            )
+            self._conversation_engine.compose_early(
+                callback=self._on_conversation_options_ready,
+            )
+        else:
+            print("[GazeSpeak] No selections yet to speak")
     
     def _on_phrase_selected(self, phrase):
         """Handle quick phrase selection — speak immediately."""
@@ -479,6 +619,9 @@ class GazeSpeakApp(QMainWindow):
     
     def _start_calibration(self):
         """Launch the calibration screen."""
+        # Ensure tracker is running so calibration can receive gaze samples
+        if not self._tracker.isRunning():
+            self._tracker.start()
         self._calibration.start_calibration()
     
     def _on_calibration_complete(self, cal_data):
@@ -486,7 +629,8 @@ class GazeSpeakApp(QMainWindow):
         self._tracker.set_calibration(cal_data)
         
         # Use the calibrated center point to define zone boundaries
-        # center_x is in calibrated space (0.0-1.0 after mapping)
+        # After _apply_calibration maps raw→screen, center_norm tells us
+        # where "straight ahead" sits in the 0.0–1.0 screen space.
         if isinstance(cal_data, dict) and 'center_x' in cal_data:
             left_x = cal_data['left_x']
             center_x = cal_data['center_x']
@@ -494,7 +638,7 @@ class GazeSpeakApp(QMainWindow):
             span = right_x - left_x
             
             if abs(span) > 0.01:
-                # Map center to 0.0-1.0 range
+                # Map center to 0.0-1.0 range (same mapping the tracker uses)
                 center_norm = (center_x - left_x) / span
                 center_norm = max(0.2, min(0.8, center_norm))
                 
@@ -507,6 +651,24 @@ class GazeSpeakApp(QMainWindow):
                       f"LEFT < {self._zone_left:.2f} | "
                       f"CENTER {self._zone_left:.2f}-{self._zone_right:.2f} | "
                       f"RIGHT > {self._zone_right:.2f}")
+        
+        # On initial startup, now show the main window
+        if self._initial_startup:
+            self._initial_startup = False
+            self._keyboard.set_highlight(0, 0)
+            self.show()
+            print("[GazeSpeak] ✓ Calibration complete — app is now active")
+    
+    def _on_calibration_cancelled(self):
+        """Handle calibration cancellation — show app with default thresholds."""
+        print("[GazeSpeak] Calibration cancelled — using default zone thresholds")
+        if self._initial_startup:
+            self._initial_startup = False
+            self._keyboard.set_highlight(0, 0)
+            # Ensure tracker is running even without calibration
+            if not self._tracker.isRunning():
+                self._tracker.start()
+            self.show()
     
     def _apply_theme(self):
         """Apply the dark theme to the entire application."""
@@ -589,10 +751,12 @@ def main():
     app.setStyle("Fusion")
     
     window = GazeSpeakApp()
-    window.show()
+    # Do NOT call window.show() here — the main window will be shown
+    # after calibration completes (see _on_calibration_complete).
     
-    # Always run calibration on startup
-    QTimer.singleShot(1000, window._start_calibration)
+    # Start calibration immediately. This starts the tracker and shows
+    # the calibration fullscreen overlay. The main app window stays hidden.
+    QTimer.singleShot(500, window._start_calibration)
     
     sys.exit(app.exec())
 

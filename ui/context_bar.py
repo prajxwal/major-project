@@ -22,14 +22,17 @@ class ContextBar(QWidget):
     
     Signals:
         context_submitted(str): emitted when caretaker submits a question
+        end_conversation_requested(): emitted to end conversation mode
     """
     
     context_submitted = pyqtSignal(str)
+    end_conversation_requested = pyqtSignal()
     
     def __init__(self, parent=None):
         super().__init__(parent)
         self._stt = SpeechToTextWorker()
         self._is_recording = False
+        self._conversation_active = False
         self._setup_ui()
         self._connect_stt()
     
@@ -71,7 +74,7 @@ class ContextBar(QWidget):
         
         # Text input (fallback + shows live transcript)
         self._input = QLineEdit()
-        self._input.setPlaceholderText("Type or speak your question (e.g. 'Where does it hurt?')...")
+        self._input.setPlaceholderText("Ask a question (e.g. 'How are you feeling?') → patient picks answer...")
         self._input.setFont(QFont("Segoe UI", 13))
         self._input.setStyleSheet("""
             QLineEdit {
@@ -90,8 +93,8 @@ class ContextBar(QWidget):
         self._input.returnPressed.connect(self._submit)
         layout.addWidget(self._input, stretch=1)
         
-        # Submit button
-        self._submit_btn = QPushButton("Set Context")
+        # Submit button — "Ask" sends the question to conversation mode
+        self._submit_btn = QPushButton("Ask  →")
         self._submit_btn.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
         self._submit_btn.setFixedHeight(40)
         self._submit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -115,6 +118,29 @@ class ContextBar(QWidget):
         self._submit_btn.clicked.connect(self._submit)
         layout.addWidget(self._submit_btn)
         
+        # End conversation button (hidden by default)
+        self._end_btn = QPushButton("✕  End")
+        self._end_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self._end_btn.setFixedSize(80, 40)
+        self._end_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self._end_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #4a1a2a;
+                border: 1px solid #7a2a4a;
+                border-radius: 8px;
+                padding: 4px 10px;
+                color: #ff8080;
+                font-size: 10px;
+            }
+            QPushButton:hover {
+                background-color: #6a2a3a;
+                border-color: #ff4040;
+            }
+        """)
+        self._end_btn.clicked.connect(self._end_conversation)
+        self._end_btn.hide()
+        layout.addWidget(self._end_btn)
+        
         # Current context indicator
         self._context_label = QLabel("")
         self._context_label.setFont(QFont("Segoe UI", 9))
@@ -129,6 +155,23 @@ class ContextBar(QWidget):
         self._pulse_timer.setInterval(600)
         self._pulse_timer.timeout.connect(self._pulse_mic)
         self._pulse_on = False
+    
+    def set_conversation_active(self, active):
+        """Toggle conversation mode visual state."""
+        self._conversation_active = active
+        if active:
+            self._end_btn.show()
+            self._context_label.setText("🟢 Conversation active")
+            self._context_label.setStyleSheet("color: #50c878; font-style: italic;")
+        else:
+            self._end_btn.hide()
+            self._context_label.setText("")
+            self._context_label.setStyleSheet("color: #5a5e78; font-style: italic;")
+    
+    def _end_conversation(self):
+        """End the current conversation."""
+        self.set_conversation_active(False)
+        self.end_conversation_requested.emit()
     
     def _connect_stt(self):
         """Connect STT signals."""
