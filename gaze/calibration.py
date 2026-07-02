@@ -53,7 +53,7 @@ class CalibrationScreen(QWidget):
         
         # Calibration state
         self._phase = self.PHASE_INTRO
-        self._samples_per_point = 45  # ~1.5 sec at 30fps
+        self._samples_per_point = 60  # ~2 sec at 30fps
         self._current_samples = []
         self._left_gaze_x = 0.0
         self._center_gaze_x = 0.0
@@ -87,6 +87,12 @@ class CalibrationScreen(QWidget):
         self._progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._progress_label.setFont(QFont("Segoe UI", 13))
         self._progress_label.setStyleSheet("color: #50c878; background: transparent;")
+        
+        # Live gaze value label (shown during collection)
+        self._live_label = QLabel(self)
+        self._live_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self._live_label.setFont(QFont("Segoe UI", 12))
+        self._live_label.setStyleSheet("color: #7080a0; background: transparent;")
     
     def start_calibration(self):
         """Begin the calibration sequence."""
@@ -111,6 +117,7 @@ class CalibrationScreen(QWidget):
         self._instruction_label.setGeometry(0, int(h * 0.25), w, 50)
         self._sub_label.setGeometry(0, int(h * 0.25) + 60, w, 120)
         self._progress_label.setGeometry(0, int(h * 0.25) + 190, w, 30)
+        self._live_label.setGeometry(0, int(h * 0.25) + 225, w, 30)
     
     def receive_gaze_sample(self, gaze_x, gaze_y, confidence):
         """Called by the gaze tracker with each frame's iris ratios."""
@@ -120,6 +127,9 @@ class CalibrationScreen(QWidget):
         if confidence > 0.25:
             self._current_samples.append(gaze_x)
             self._progress = len(self._current_samples) / self._samples_per_point
+            # Show live gaze value and sample count
+            n = len(self._current_samples)
+            self._live_label.setText(f"gaze={gaze_x:.3f}  ({n}/{self._samples_per_point} samples)")
         
         if len(self._current_samples) >= self._samples_per_point:
             self._finish_current_phase()
@@ -151,21 +161,30 @@ class CalibrationScreen(QWidget):
     def _begin_collecting(self):
         self._collecting = True
         self._current_samples = []
+        self._live_label.setText("")
     
     def _finish_current_phase(self):
         """Process samples and advance to next phase."""
         self._collecting = False
+        self._live_label.setText("")
         
         if not self._current_samples:
             self._instruction_label.setText("Failed — no data. Press SPACE to retry")
             self._phase = self.PHASE_INTRO
             return
         
-        # Trimmed mean (remove outliers)
-        sorted_samples = sorted(self._current_samples)
-        trim = max(1, len(sorted_samples) // 5)
-        trimmed = sorted_samples[trim:-trim] if trim < len(sorted_samples) // 2 else sorted_samples
-        avg_x = np.mean(trimmed)
+        # IQR-based outlier rejection (robust to head movement spikes)
+        arr = sorted(self._current_samples)
+        n = len(arr)
+        q1 = arr[n // 4]
+        q3 = arr[(3 * n) // 4]
+        iqr = q3 - q1
+        lo = q1 - 1.5 * iqr
+        hi = q3 + 1.5 * iqr
+        filtered = [v for v in arr if lo <= v <= hi]
+        if not filtered:
+            filtered = arr  # fallback if all were outliers (unlikely)
+        avg_x = float(np.mean(filtered))
         
         if self._phase == self.PHASE_LEFT:
             self._left_gaze_x = avg_x
@@ -191,6 +210,19 @@ class CalibrationScreen(QWidget):
             self._sub_label.setText(
                 f"Left: {self._left_gaze_x:.3f}, Right: {self._right_gaze_x:.3f}\n"
                 "Try looking further left/right.\n\nPress SPACE to retry"
+            )
+            self._phase = self.PHASE_INTRO
+            return
+        
+        # Validate that center is actually between left and right
+        left_ok  = min(self._left_gaze_x, self._right_gaze_x)
+        right_ok = max(self._left_gaze_x, self._right_gaze_x)
+        if not (left_ok < self._center_gaze_x < right_ok):
+            self._instruction_label.setText("Calibration failed — center is out of range")
+            self._sub_label.setText(
+                f"Center ({self._center_gaze_x:.3f}) must be between "
+                f"left ({self._left_gaze_x:.3f}) and right ({self._right_gaze_x:.3f}).\n\n"
+                "Press SPACE to retry"
             )
             self._phase = self.PHASE_INTRO
             return

@@ -66,6 +66,7 @@ class KeyboardWidget(QWidget):
         self._dwell_time_ms = 800  # milliseconds to dwell before selection
         self._dwell_progress = 0.0  # 0.0 to 1.0
         self._navigating = False    # True when user is stepping (suppresses dwell)
+        self._dwell_armed = False   # True only after user has done a deliberate gesture
         
         # Key geometry cache
         self._key_rects = {}  # key_label -> QRectF
@@ -77,7 +78,7 @@ class KeyboardWidget(QWidget):
         self._selected_flash_timer.setSingleShot(True)
         self._selected_flash_timer.timeout.connect(self._clear_selection_flash)
         
-        # Dwell timer (only advances when not navigating)
+        # Dwell timer (only advances when armed and not navigating)
         self._dwell_timer = QTimer(self)
         self._dwell_timer.setInterval(16)  # ~60fps updates
         self._dwell_timer.timeout.connect(self._update_dwell)
@@ -143,10 +144,22 @@ class KeyboardWidget(QWidget):
     
     def set_navigating(self, is_navigating):
         """Set whether the user is currently stepping through keys.
-        When navigating, dwell is suppressed."""
+        When navigating, dwell is suppressed and disarmed."""
         self._navigating = is_navigating
         if is_navigating:
+            self._dwell_armed = False
             self._dwell_progress = 0.0
+    
+    def arm_dwell(self):
+        """Arm the dwell timer — called when user returns to CENTER after a gesture."""
+        if not self._navigating:
+            self._dwell_armed = True
+            self._dwell_progress = 0.0
+    
+    def disarm_dwell(self):
+        """Disarm the dwell timer — called at startup or when navigating."""
+        self._dwell_armed = False
+        self._dwell_progress = 0.0
     
     # ─── Dwell & Selection ──────────────────────────────────────
     
@@ -155,8 +168,8 @@ class KeyboardWidget(QWidget):
         self._dwell_time_ms = max(300, min(3000, ms))
     
     def _update_dwell(self):
-        """Advance dwell progress on the highlighted key (only when not navigating)."""
-        if self._navigating:
+        """Advance dwell progress on the highlighted key (only when armed and not navigating)."""
+        if self._navigating or not self._dwell_armed:
             self._dwell_progress = 0.0
             return
         
@@ -178,6 +191,11 @@ class KeyboardWidget(QWidget):
         self._selected_key = key
         self._selected_flash_timer.start(300)
         
+        # Disarm dwell to prevent immediate double-fire; re-arm after brief pause
+        self._dwell_armed = False
+        self._dwell_progress = 0.0
+        QTimer.singleShot(700, self._maybe_rearm_dwell)
+        
         # Check if it's a special key
         for label, action in SPECIAL_KEYS:
             if key == label:
@@ -186,6 +204,12 @@ class KeyboardWidget(QWidget):
         
         # Regular letter key
         self.key_pressed.emit(key)
+    
+    def _maybe_rearm_dwell(self):
+        """Re-arm dwell after the post-selection pause, if still not navigating."""
+        if not self._navigating:
+            self._dwell_armed = True
+            self._dwell_progress = 0.0
     
     def _clear_selection_flash(self):
         """Clear the green flash after selection."""

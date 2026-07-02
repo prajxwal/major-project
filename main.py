@@ -98,23 +98,20 @@ class GazeSpeakApp(QMainWindow):
         # Abbreviation mode tracking
         self._abbrev_mode = False
         
-        # ─── Step-based navigation state ───
-        self._nav_area = "keyboard"   # "keyboard" or "predictions"
+        # ─── Gesture-based navigation state ───
+        self._nav_area = "keyboard"      # "keyboard" or "predictions"
         self._key_row = 0
         self._key_col = 0
         self._pred_index = 0
-        self._current_zone = "CENTER"  # "LEFT", "CENTER", "RIGHT"
-        self._step_count = 0
-        
+        self._current_zone = "CENTER"    # committed zone: "LEFT", "CENTER", "RIGHT"
+        self._pending_zone = "CENTER"    # zone candidate accumulating hysteresis frames
+        self._zone_frame_count = 0       # consecutive frames matching _pending_zone
+        self._HYSTERESIS_FRAMES = 4      # frames required before committing a zone change
+        self._user_has_gestured = False  # True after first deliberate LEFT/RIGHT gesture
+
         # Gaze zone thresholds (calibrated 0.0–1.0)
         self._zone_left = 0.30
         self._zone_right = 0.70
-        
-        # Step timing
-        self._step_timer = QTimer(self)
-        self._step_timer.timeout.connect(self._do_gaze_step)
-        self._step_initial_delay = 450   # ms before first repeat
-        self._step_repeat_delay = 300    # ms between subsequent steps
         
         # Build UI
         self._setup_ui()
@@ -237,53 +234,56 @@ class GazeSpeakApp(QMainWindow):
         self._conversation_panel.speak_now_requested.connect(self._on_conversation_speak_now)
     
     def _on_gaze_updated(self, gaze_x, gaze_y, confidence):
-        """Handle gaze updates — zone-based step navigation."""
+        """Handle gaze updates — gesture-based scan navigation with hysteresis."""
         # Feed raw data to calibration screen if active — skip navigation
         if self._calibration.isVisible():
             self._calibration.receive_gaze_sample(gaze_x, gaze_y, confidence)
             return
-        
+
         # Skip navigation if the main window isn't visible yet
         if not self.isVisible():
             return
-        
-        # Determine horizontal zone
+
+        # Determine raw horizontal zone from gaze position
         if gaze_x < self._zone_left:
-            new_zone = "LEFT"
+            raw_zone = "LEFT"
         elif gaze_x > self._zone_right:
-            new_zone = "RIGHT"
+            raw_zone = "RIGHT"
         else:
-            new_zone = "CENTER"
-        
-        # ─── Conversation mode: feed zone to conversation panel ───
+            raw_zone = "CENTER"
+
+        # ─── Conversation mode: use raw zone directly for responsiveness ───
         if self._conversation_mode and self._stacked.currentIndex() == 3:
-            self._conversation_panel.set_zone(new_zone)
-            self._current_zone = new_zone
-            # Update tracking status and return (no keyboard navigation)
+            self._conversation_panel.set_zone(raw_zone)
+            self._current_zone = raw_zone
             self._update_tracking_status(confidence)
             return
-        
-        # ─── Keyboard navigation mode ───
-        if new_zone != self._current_zone:
-            self._current_zone = new_zone
-            self._step_count = 0
-            
-            if new_zone in ("LEFT", "RIGHT"):
-                # Entering a navigation zone — step once immediately
-                self._keyboard.set_navigating(True)
-                self._prediction_bar.set_navigating(True)
-                self._do_gaze_step()
-                # Start repeat timer
-                self._step_timer.start(self._step_initial_delay)
+
+        # ─── Keyboard navigation: apply hysteresis before committing zone ───
+        if raw_zone == self._current_zone:
+            # Still in the committed zone — reset hysteresis counter
+            self._pending_zone = raw_zone
+            self._zone_frame_count = 0
+        else:
+            # Accumulate frames toward a potential zone change
+            if raw_zone == self._pending_zone:
+                self._zone_frame_count += 1
             else:
-                # Returned to CENTER — stop stepping, enable dwell
-                self._step_timer.stop()
-                self._keyboard.set_navigating(False)
-                self._prediction_bar.set_navigating(False)
-        
+                # Direction changed before threshold — restart counter
+                self._pending_zone = raw_zone
+                self._zone_frame_count = 1
+
+            if self._zone_frame_count >= self._HYSTERESIS_FRAMES:
+                # Enough consecutive frames — commit the zone change
+                prev_zone = self._current_zone
+                self._current_zone = raw_zone
+                self._zone_frame_count = 0
+                self._pending_zone = raw_zone
+                self._handle_zone_change(prev_zone, raw_zone)
+
         # Snap the gaze cursor to the highlighted item's center
         self._snap_cursor_to_highlight(confidence)
-        
+
         # Update tracking status
         self._update_tracking_status(confidence)
     
@@ -299,19 +299,29 @@ class GazeSpeakApp(QMainWindow):
             self._status_indicator.setText("● Low")
             self._status_indicator.setStyleSheet("color: #f06040; padding: 8px;")
     
-    def _do_gaze_step(self):
-        """Execute one navigation step in the current direction."""
-        self._step_count += 1
-        direction = 1 if self._current_zone == "RIGHT" else -1
-        
-        if self._nav_area == "predictions":
-            self._step_prediction(direction)
+    def _handle_zone_change(self, prev_zone, new_zone):
+        """React to a committed zone transition.
+
+        Gesture model:
+          CENTER → LEFT or RIGHT : one deliberate step, disarm dwell
+          LEFT or RIGHT → CENTER : stop, arm dwell (if user has gestured before)
+        """
+        if new_zone == "CENTER":
+            # User returned to neutral — stop navigating and arm dwell
+            self._keyboard.set_navigating(False)
+            self._prediction_bar.set_navigating(False)
+            if self._user_has_gestured:
+                self._keyboard.arm_dwell()
         else:
-            self._step_keyboard(direction)
-        
-        # After first step, switch to faster repeat rate
-        if self._step_count == 1:
-            self._step_timer.start(self._step_repeat_delay)
+            # Deliberate LEFT or RIGHT gesture — one step, dwell disarmed
+            self._user_has_gestured = True
+            self._keyboard.set_navigating(True)
+            self._prediction_bar.set_navigating(True)
+            direction = -1 if new_zone == "LEFT" else 1
+            if self._nav_area == "predictions":
+                self._step_prediction(direction)
+            else:
+                self._step_keyboard(direction)
     
     def _step_keyboard(self, direction):
         """Step the keyboard highlight left (-1) or right (+1) with row wrapping."""
@@ -636,22 +646,30 @@ class GazeSpeakApp(QMainWindow):
             center_x = cal_data['center_x']
             right_x = cal_data['right_x']
             span = right_x - left_x
-            
+
             if abs(span) > 0.01:
                 # Map center to 0.0-1.0 range (same mapping the tracker uses)
                 center_norm = (center_x - left_x) / span
                 center_norm = max(0.2, min(0.8, center_norm))
-                
-                # Build dead zone around center (±15% of range)
-                margin = 0.15
+
+                # Build dead zone around center (±20% of range — wider = easier to hit)
+                margin = 0.20
                 self._zone_left = center_norm - margin
                 self._zone_right = center_norm + margin
-                
+
                 print(f"[GazeSpeak] Zone thresholds: "
                       f"LEFT < {self._zone_left:.2f} | "
                       f"CENTER {self._zone_left:.2f}-{self._zone_right:.2f} | "
                       f"RIGHT > {self._zone_right:.2f}")
-        
+
+        # Reset navigation state so no accidental dwell fires after calibration
+        self._user_has_gestured = False
+        self._current_zone = "CENTER"
+        self._pending_zone = "CENTER"
+        self._zone_frame_count = 0
+        self._keyboard.disarm_dwell()
+        self._keyboard.set_navigating(False)
+
         # On initial startup, now show the main window
         if self._initial_startup:
             self._initial_startup = False
