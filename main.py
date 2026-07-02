@@ -20,7 +20,7 @@ import sys
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                               QHBoxLayout, QStackedWidget, QLabel, QFrame)
-from PyQt6.QtCore import Qt, QTimer, QPoint
+from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal
 from PyQt6.QtGui import QFont, QColor, QScreen, QImage, QPixmap
 
 from gaze.tracker import GazeTracker
@@ -71,7 +71,10 @@ class WebcamWidget(QLabel):
 
 class GazeSpeakApp(QMainWindow):
     """Main application window."""
-    
+
+    # Thread-safe signal: delivers LLM conversation results from the worker
+    # thread to the GUI thread without relying on QTimer.singleShot.
+    _conversation_ready = pyqtSignal(object)
     def __init__(self):
         super().__init__()
         self.setWindowTitle("GazeSpeak — Eye Gaze Communication")
@@ -189,6 +192,9 @@ class GazeSpeakApp(QMainWindow):
     def _connect_signals(self):
         """Wire up all signals between components."""
         
+        # Conversation result signal (worker thread → GUI thread)
+        self._conversation_ready.connect(self._apply_conversation_options)
+
         # Gaze tracker → UI updates
         self._tracker.gaze_updated.connect(self._on_gaze_updated)
         self._tracker.frame_ready.connect(self._webcam_widget.update_frame)
@@ -533,11 +539,15 @@ class GazeSpeakApp(QMainWindow):
     # ─── Conversation mode handlers ─────────────────────────────
     
     def _on_conversation_options_ready(self, result):
-        """Handle LLM-generated answer options (called from background thread)."""
-        QTimer.singleShot(0, lambda: self._apply_conversation_options(result))
+        """Called from LLM worker thread — emit signal to deliver to GUI thread."""
+        print(f"[GazeSpeak] Conversation result ready: "
+              f"left='{result.get('left')}' right='{result.get('right')}' "
+              f"is_final={result.get('is_final')}")
+        self._conversation_ready.emit(result)
     
     def _apply_conversation_options(self, result):
-        """Apply conversation options on the UI thread."""
+        """Apply conversation options on the UI thread (called via signal)."""
+        print(f"[GazeSpeak] Applying conversation options on UI thread")
         if result.get('is_final'):
             # LLM decided the response is complete
             composed = result.get('composed_response', '')

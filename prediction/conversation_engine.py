@@ -185,6 +185,7 @@ class ConversationEngine:
                                  regenerate: bool):
         """Background thread: call Groq LLM to generate 2 options."""
         try:
+            print(f"[ConversationEngine] Calling Groq API for: '{self._current_question}'")
             prompt = self._build_options_prompt(regenerate)
             system_prompt = self._get_system_prompt()
 
@@ -197,14 +198,20 @@ class ConversationEngine:
                 temperature=0.4 if not regenerate else 0.7,
                 max_tokens=300,
                 top_p=0.9,
+                timeout=15.0,
             )
 
             content = response.choices[0].message.content.strip()
+            print(f"[ConversationEngine] LLM raw response: {content[:200]}")
             result = self._parse_options_response(content)
 
             if result:
+                print(f"[ConversationEngine] Parsed OK — "
+                      f"left='{result['left']}' right='{result['right']}' "
+                      f"is_final={result['is_final']}")
                 callback(result)
             else:
+                print("[ConversationEngine] Parse failed — using fallback options")
                 callback(self._fallback_options())
 
         except Exception as e:
