@@ -16,6 +16,7 @@ Example flow:
 """
 
 import os
+import re
 import json
 import threading
 import time
@@ -367,6 +368,9 @@ class ConversationEngine:
 
     def _parse_options_response(self, content: str) -> Optional[dict]:
         """Parse the LLM JSON response into an options dict."""
+        # Strip markdown code fences (e.g. ```json ... ```) that some models add
+        content = re.sub(r'```(?:json)?\s*', '', content).strip('`').strip()
+
         try:
             data = json.loads(content)
             if isinstance(data, dict) and "left" in data and "right" in data:

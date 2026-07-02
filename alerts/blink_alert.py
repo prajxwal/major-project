@@ -67,6 +67,7 @@ class BlinkAlertManager:
         # Blink timestamps (deque for sliding window)
         self._blink_times: deque[float] = deque()
         self._last_alert_time = 0.0
+        self._paused = False  # True during calibration — blinks are ignored
 
         # Alarm control
         self._alarm_active = False
@@ -80,11 +81,29 @@ class BlinkAlertManager:
         Signature: callback(message: str)"""
         self._on_alert_callback = callback
 
+    def pause(self):
+        """Pause blink detection (e.g. during calibration).
+        Clears accumulated blink history so calibration blinks never count."""
+        self._paused = True
+        self._blink_times.clear()
+        print("[BlinkAlert] ⏸ Blink detection paused")
+
+    def resume(self):
+        """Resume blink detection after calibration completes or is cancelled.
+        Clears history again so any blinks during calibration don't carry over."""
+        self._paused = False
+        self._blink_times.clear()
+        print("[BlinkAlert] ▶ Blink detection resumed")
+
     def register_blink(self):
         """
         Call this each time a blink is detected.
         Manages the sliding window and checks for rapid-blink trigger.
+        No-op while paused.
         """
+        if self._paused:
+            return
+
         now = time.time()
         self._blink_times.append(now)
 

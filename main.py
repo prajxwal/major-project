@@ -435,6 +435,9 @@ class GazeSpeakApp(QMainWindow):
     
     def _on_special_key(self, action):
         """Handle special key actions."""
+        # Block layout-switching keys while conversation mode is active
+        if self._conversation_mode and action in ("PHRASES", "SETTINGS"):
+            return
         if action == "BACKSPACE":
             self._sentence_bar.backspace()
         elif action == "SPACE":
@@ -510,13 +513,17 @@ class GazeSpeakApp(QMainWindow):
         """Handle caretaker question — start conversation mode with LLM options."""
         self._abbreviation_expander.set_caretaker_context(question)
         print(f"[GazeSpeak] Caretaker context set: '{question}'")
-        
+
         # Switch to conversation mode
         self._conversation_mode = True
         self._context_bar.set_conversation_active(True)
         self._conversation_panel.set_loading(question, [])
         self._stacked.setCurrentIndex(3)  # show conversation panel
-        
+
+        # Lock keyboard so its dwell timer cannot fire invisibly in the background
+        self._keyboard.disarm_dwell()
+        self._keyboard.set_navigating(True)
+
         # Generate answer options via LLM
         self._conversation_engine.start_conversation(
             question,
@@ -584,6 +591,10 @@ class GazeSpeakApp(QMainWindow):
         self._conversation_panel.clear()
         self._context_bar.set_conversation_active(False)
         self._stacked.setCurrentIndex(0)
+        # Restore keyboard to a safe state — user must gesture before dwell re-arms
+        self._keyboard.set_navigating(False)
+        self._keyboard.disarm_dwell()
+        self._user_has_gestured = False
         print("[GazeSpeak] Switched to keyboard mode")
     
     def _on_conversation_back(self):
@@ -629,6 +640,8 @@ class GazeSpeakApp(QMainWindow):
     
     def _start_calibration(self):
         """Launch the calibration screen."""
+        # Pause blink alert so natural calibration blinks don’t trigger SOS
+        self._blink_alert.pause()
         # Ensure tracker is running so calibration can receive gaze samples
         if not self._tracker.isRunning():
             self._tracker.start()
@@ -662,6 +675,9 @@ class GazeSpeakApp(QMainWindow):
                       f"CENTER {self._zone_left:.2f}-{self._zone_right:.2f} | "
                       f"RIGHT > {self._zone_right:.2f}")
 
+        # Resume blink alert now that calibration is done
+        self._blink_alert.resume()
+
         # Reset navigation state so no accidental dwell fires after calibration
         self._user_has_gestured = False
         self._current_zone = "CENTER"
@@ -679,6 +695,8 @@ class GazeSpeakApp(QMainWindow):
     
     def _on_calibration_cancelled(self):
         """Handle calibration cancellation — show app with default thresholds."""
+        # Resume blink alert regardless of calibration outcome
+        self._blink_alert.resume()
         print("[GazeSpeak] Calibration cancelled — using default zone thresholds")
         if self._initial_startup:
             self._initial_startup = False
