@@ -109,7 +109,7 @@ class GazeSpeakApp(QMainWindow):
         self._current_zone = "CENTER"    # committed zone: "LEFT", "CENTER", "RIGHT"
         self._pending_zone = "CENTER"    # zone candidate accumulating hysteresis frames
         self._zone_frame_count = 0       # consecutive frames matching _pending_zone
-        self._HYSTERESIS_FRAMES = 4      # frames required before committing a zone change
+        self._HYSTERESIS_FRAMES = 2      # frames required before committing a zone change
         self._user_has_gestured = False  # True after first deliberate LEFT/RIGHT gesture
 
         # Gaze zone thresholds (calibrated 0.0–1.0)
@@ -671,19 +671,27 @@ class GazeSpeakApp(QMainWindow):
             span = right_x - left_x
 
             if abs(span) > 0.01:
-                # Map center to 0.0-1.0 range (same mapping the tracker uses)
+                # Map center to 0.0-1.0 calibrated space (same transform the tracker uses)
                 center_norm = (center_x - left_x) / span
-                center_norm = max(0.2, min(0.8, center_norm))
+                center_norm = max(0.0, min(1.0, center_norm))
 
-                # Build dead zone around center (±20% of range — wider = easier to hit)
-                margin = 0.20
-                self._zone_left = center_norm - margin
-                self._zone_right = center_norm + margin
+                # Asymmetric proportional margins:
+                # Each side gets 50% of its own half-range as the dead-zone border,
+                # with a minimum floor so both zones are ALWAYS reachable.
+                left_range  = center_norm          # mapped distance from left extreme to center
+                right_range = 1.0 - center_norm   # mapped distance from center to right extreme
+
+                left_margin  = max(left_range  * 0.55, 0.04)  # at least 4% of range
+                right_margin = max(right_range * 0.45, 0.12)  # at least 12% of range
+
+                self._zone_left  = max(0.0, center_norm - left_margin)
+                self._zone_right = min(1.0, center_norm + right_margin)
 
                 print(f"[GazeSpeak] Zone thresholds: "
-                      f"LEFT < {self._zone_left:.2f} | "
-                      f"CENTER {self._zone_left:.2f}-{self._zone_right:.2f} | "
-                      f"RIGHT > {self._zone_right:.2f}")
+                      f"LEFT < {self._zone_left:.3f} | "
+                      f"CENTER {self._zone_left:.3f}-{self._zone_right:.3f} | "
+                      f"RIGHT > {self._zone_right:.3f} "
+                      f"(center_norm={center_norm:.3f})")
 
         # Resume blink alert now that calibration is done
         self._blink_alert.resume()
