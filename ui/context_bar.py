@@ -50,15 +50,15 @@ class ContextBar(QWidget):
         
         # Caretaker label
         label = QLabel("Caretaker")
-        label.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        label.setFont(QFont("Roboto Mono", 10, QFont.Weight.Bold))
         label.setStyleSheet("color: #5a5e78; letter-spacing: 1px;")
         label.setFixedWidth(70)
         label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(label)
         
         # Microphone button
-        self._mic_btn = QPushButton("🎙  Speak")
-        self._mic_btn.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self._mic_btn = QPushButton("Speak")
+        self._mic_btn.setFont(QFont("Roboto Mono", 11, QFont.Weight.DemiBold))
         self._mic_btn.setFixedSize(110, 40)
         self._mic_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._mic_btn.setStyleSheet(self._mic_idle_style())
@@ -75,7 +75,7 @@ class ContextBar(QWidget):
         # Text input (fallback + shows live transcript)
         self._input = QLineEdit()
         self._input.setPlaceholderText("Ask a question (e.g. 'How are you feeling?') → patient picks answer...")
-        self._input.setFont(QFont("Segoe UI", 13))
+        self._input.setFont(QFont("Roboto Mono", 13))
         self._input.setStyleSheet("""
             QLineEdit {
                 background-color: #1a1a2e;
@@ -94,8 +94,8 @@ class ContextBar(QWidget):
         layout.addWidget(self._input, stretch=1)
         
         # Submit button — "Ask" sends the question to conversation mode
-        self._submit_btn = QPushButton("Ask  →")
-        self._submit_btn.setFont(QFont("Segoe UI", 11, QFont.Weight.DemiBold))
+        self._submit_btn = QPushButton("Ask  ->")
+        self._submit_btn.setFont(QFont("Roboto Mono", 11, QFont.Weight.DemiBold))
         self._submit_btn.setFixedHeight(40)
         self._submit_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._submit_btn.setStyleSheet("""
@@ -119,8 +119,8 @@ class ContextBar(QWidget):
         layout.addWidget(self._submit_btn)
         
         # End conversation button (hidden by default)
-        self._end_btn = QPushButton("✕  End")
-        self._end_btn.setFont(QFont("Segoe UI", 10, QFont.Weight.DemiBold))
+        self._end_btn = QPushButton("X  End")
+        self._end_btn.setFont(QFont("Roboto Mono", 10, QFont.Weight.DemiBold))
         self._end_btn.setFixedSize(80, 40)
         self._end_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self._end_btn.setStyleSheet("""
@@ -143,7 +143,7 @@ class ContextBar(QWidget):
         
         # Current context indicator
         self._context_label = QLabel("")
-        self._context_label.setFont(QFont("Segoe UI", 9))
+        self._context_label.setFont(QFont("Roboto Mono", 9))
         self._context_label.setStyleSheet("color: #5a5e78; font-style: italic;")
         self._context_label.setFixedWidth(180)
         self._context_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -161,7 +161,7 @@ class ContextBar(QWidget):
         self._conversation_active = active
         if active:
             self._end_btn.show()
-            self._context_label.setText("🟢 Conversation active")
+            self._context_label.setText("Conversation active")
             self._context_label.setStyleSheet("color: #50c878; font-style: italic;")
         else:
             self._end_btn.hide()
@@ -192,8 +192,8 @@ class ContextBar(QWidget):
         """Start microphone recording."""
         self._is_recording = True
         self._input.clear()
-        self._input.setPlaceholderText("🔴 Listening... speak your question")
-        self._mic_btn.setText("⏹  Stop")
+        self._input.setPlaceholderText("[REC] Listening... speak your question")
+        self._mic_btn.setText("[ ] Stop")
         self._mic_btn.setStyleSheet(self._mic_recording_style())
         self._pulse_timer.start()
         self._stt.start_recording()
@@ -202,7 +202,7 @@ class ContextBar(QWidget):
         """Stop microphone recording and auto-submit."""
         self._is_recording = False
         self._pulse_timer.stop()
-        self._mic_btn.setText("🎙  Speak")
+        self._mic_btn.setText("Speak")
         self._mic_btn.setStyleSheet(self._mic_idle_style())
         self._input.setPlaceholderText("Type or speak your question (e.g. 'Where does it hurt?')...")
         self._stt.stop_recording()
@@ -244,19 +244,19 @@ class ContextBar(QWidget):
         """Handle STT errors."""
         print(f"[ContextBar] STT error: {error}")
         self._stop_recording()
-        self._context_label.setText(f"⚠ STT Error")
+        self._context_label.setText("! STT Error")
         self._context_label.setStyleSheet("color: #ff6060; font-style: italic;")
     
     def _on_session_started(self):
         """Handle STT session start."""
-        self._context_label.setText("🔴 Recording...")
+        self._context_label.setText("[REC] Recording...")
         self._context_label.setStyleSheet("color: #ff4040; font-style: italic;")
     
     def _on_session_ended(self):
         """Handle STT session end."""
         self._is_recording = False
         self._pulse_timer.stop()
-        self._mic_btn.setText("🎙  Speak")
+        self._mic_btn.setText("Speak")
         self._mic_btn.setStyleSheet(self._mic_idle_style())
     
     def _pulse_mic(self):
@@ -272,7 +272,7 @@ class ContextBar(QWidget):
         text = self._input.text().strip()
         if text:
             self.context_submitted.emit(text)
-            self._context_label.setText(f"📌 \"{text[:35]}{'...' if len(text) > 35 else ''}\"")
+            self._context_label.setText(f">> \"{text[:35]}{'...' if len(text) > 35 else ''}\"")
             self._context_label.setStyleSheet("color: #50c878; font-style: italic;")
             self._input.clear()
             # Reset input style

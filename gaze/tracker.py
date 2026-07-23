@@ -106,6 +106,12 @@ class GazeTracker(QThread):
     def set_smoothing(self, factor):
         """Set smoothing factor (0.1 = very smooth, 1.0 = no smoothing)."""
         self._smooth_factor = max(0.05, min(1.0, factor))
+
+    def reset_blink_state(self):
+        """Clear blink detection state — call before resuming after calibration
+        so stale 'eyes-closed' state from calibration doesn't fire a false blink."""
+        self._ear_below_count = 0
+        self._blink_in_progress = False
     
     def stop(self):
         """Stop the tracking thread."""

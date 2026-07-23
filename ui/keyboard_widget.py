@@ -22,12 +22,12 @@ QWERTY_ROWS = [
 ]
 
 SPECIAL_KEYS = [
-    ("⌫", "BACKSPACE"),
-    ("␣", "SPACE"),
-    ("🔊", "SPEAK"),
-    ("⌧", "CLEAR"),
-    ("💬", "PHRASES"),
-    ("⚙", "SETTINGS"),
+    ("<-", "BACKSPACE"),
+    ("_", "SPACE"),
+    ("\U0001f50a", "SPEAK"),
+    ("CLR", "CLEAR"),
+    ("PHR", "PHRASES"),
+    ("SET", "SETTINGS"),
 ]
 
 
@@ -311,7 +311,7 @@ class KeyboardWidget(QWidget):
                 if is_special:
                     font_size = min(int(rect.height() * 0.4), 32)
                 weight = QFont.Weight.Bold if is_highlighted else QFont.Weight.Medium
-                painter.setFont(QFont("Segoe UI", font_size, weight))
+                painter.setFont(QFont("Roboto Mono", font_size, weight))
                 painter.setPen(text_color)
                 painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, key)
                 

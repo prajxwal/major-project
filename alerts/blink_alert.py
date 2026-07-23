@@ -2,9 +2,10 @@
 alerts/blink_alert.py — Rapid Blink Detection & Emergency Alert System.
 
 Monitors blink events from the gaze tracker. If the user blinks rapidly
-(≥6 blinks within a 4-second window), the system:
-  1. Plays a loud repeating beep alarm
-  2. Sends an SMS to the caregiver via Twilio API
+(≥5 blinks within a 4-second window), the system:
+  1. Shows a full-screen red emergency overlay
+  2. Plays a continuous siren alarm
+  3. Sends an SMS to the caregiver via Twilio API
 
 Designed as an SOS mechanism for ALS patients using GazeSpeak.
 """
@@ -68,6 +69,8 @@ class BlinkAlertManager:
         self._blink_times: deque[float] = deque()
         self._last_alert_time = 0.0
         self._paused = False  # True during calibration — blinks are ignored
+        self._resume_time = 0.0  # time when detection last resumed
+        self._GRACE_PERIOD = 2.0  # seconds to ignore blinks after resume
 
         # Alarm control
         self._alarm_active = False
@@ -76,10 +79,18 @@ class BlinkAlertManager:
         # Alert callback (for UI notifications)
         self._on_alert_callback = None
 
+        # SMS status callback: called with 'sending', 'sent', or 'failed'
+        self._on_sms_status_callback = None
+
     def set_alert_callback(self, callback):
         """Set a callback function to be called when alert triggers.
         Signature: callback(message: str)"""
         self._on_alert_callback = callback
+
+    def set_sms_status_callback(self, callback):
+        """Set a callback to receive SMS delivery status updates.
+        Signature: callback(status: str)  where status is 'sending', 'sent', or 'failed'"""
+        self._on_sms_status_callback = callback
 
     def pause(self):
         """Pause blink detection (e.g. during calibration).
@@ -90,21 +101,29 @@ class BlinkAlertManager:
 
     def resume(self):
         """Resume blink detection after calibration completes or is cancelled.
-        Clears history again so any blinks during calibration don't carry over."""
+        Clears history again so any blinks during calibration don't carry over.
+        Starts a grace period so residual queued blinks don't fire immediately."""
         self._paused = False
         self._blink_times.clear()
-        print("[BlinkAlert] ▶ Blink detection resumed")
+        self._last_alert_time = 0.0   # reset cooldown so next alert isn't blocked
+        self._resume_time = time.time()
+        print("[BlinkAlert] ▶ Blink detection resumed (2s grace period active)")
 
     def register_blink(self):
         """
         Call this each time a blink is detected.
         Manages the sliding window and checks for rapid-blink trigger.
-        No-op while paused.
+        No-op while paused or during the grace period after resume.
         """
         if self._paused:
             return
 
         now = time.time()
+
+        # Ignore blinks during the grace period right after resume
+        if (now - self._resume_time) < self._GRACE_PERIOD:
+            return
+
         self._blink_times.append(now)
 
         # Purge old blinks outside the window
@@ -112,6 +131,8 @@ class BlinkAlertManager:
             self._blink_times.popleft()
 
         blink_count = len(self._blink_times)
+        print(f"[BlinkAlert] 👁 Blink #{blink_count} / {self._blink_threshold} "
+              f"(window={self._time_window:.1f}s)")
 
         # Check trigger conditions
         if blink_count >= self._blink_threshold:
@@ -121,42 +142,50 @@ class BlinkAlertManager:
                 self._trigger_alert()
 
     def _trigger_alert(self):
-        """Fire the emergency alert — beep + SMS."""
+        """Fire the emergency alert — siren + SMS."""
         print(f"[BlinkAlert] 🚨 EMERGENCY ALERT TRIGGERED — rapid blinks detected!")
 
-        # Start alarm beeping in background
+        # Notify UI first (shows emergency screen)
+        if self._on_alert_callback:
+            self._on_alert_callback("🚨 Emergency alert sent to caregiver!")
+
+        # Report SMS as 'sending' immediately
+        if self._on_sms_status_callback:
+            self._on_sms_status_callback("sending")
+
+        # Start alarm siren in background
         self._start_alarm()
 
         # Send SMS in background thread (don't block the tracker)
         sms_thread = threading.Thread(target=self._send_sms, daemon=True)
         sms_thread.start()
 
-        # Notify UI
-        if self._on_alert_callback:
-            self._on_alert_callback("🚨 Emergency alert sent to caregiver!")
-
     def _start_alarm(self):
-        """Play repeating beep alarm (Windows winsound)."""
+        """Play a continuous siren alarm (Windows winsound) until stop_alarm() is called."""
         if self._alarm_active:
             return
 
         self._alarm_active = True
 
-        def _beep_loop():
-            # Beep for 15 seconds (30 short beeps)
-            for _ in range(30):
-                if not self._alarm_active:
-                    break
+        def _siren_loop():
+            """Alternating high/low tones — loops forever until _alarm_active is False."""
+            while self._alarm_active:
                 try:
-                    winsound.Beep(1800, 250)  # 1800 Hz for 250ms
-                    time.sleep(0.15)          # 150ms gap
-                    winsound.Beep(2200, 250)  # 2200 Hz for 250ms
-                    time.sleep(0.15)
+                    # Rising wail — sweep from 800 Hz → 1200 Hz
+                    for freq in range(800, 1201, 40):
+                        if not self._alarm_active:
+                            return
+                        winsound.Beep(freq, 30)
+                    # Falling wail — sweep from 1200 Hz → 800 Hz
+                    for freq in range(1200, 799, -40):
+                        if not self._alarm_active:
+                            return
+                        winsound.Beep(freq, 30)
                 except Exception:
                     break
             self._alarm_active = False
 
-        self._alarm_thread = threading.Thread(target=_beep_loop, daemon=True)
+        self._alarm_thread = threading.Thread(target=_siren_loop, daemon=True)
         self._alarm_thread.start()
 
     def stop_alarm(self):
@@ -167,14 +196,20 @@ class BlinkAlertManager:
         """Send emergency SMS to the caregiver via Twilio."""
         if not self._twilio_client:
             print("[BlinkAlert] ✗ Twilio not configured — skipping SMS")
+            if self._on_sms_status_callback:
+                self._on_sms_status_callback("failed")
             return
 
         if not self._caregiver_phone:
             print("[BlinkAlert] ✗ No caregiver phone number set — skipping SMS")
+            if self._on_sms_status_callback:
+                self._on_sms_status_callback("failed")
             return
 
         if not self._twilio_phone:
             print("[BlinkAlert] ✗ No Twilio phone number set — skipping SMS")
+            if self._on_sms_status_callback:
+                self._on_sms_status_callback("failed")
             return
 
         try:
@@ -187,8 +222,12 @@ class BlinkAlertManager:
                 to=self._caregiver_phone,
             )
             print(f"[BlinkAlert] ✓ SMS sent — SID: {message.sid}")
+            if self._on_sms_status_callback:
+                self._on_sms_status_callback("sent")
         except Exception as e:
             print(f"[BlinkAlert] ✗ SMS failed: {e}")
+            if self._on_sms_status_callback:
+                self._on_sms_status_callback("failed")
 
     @property
     def is_alarm_active(self):

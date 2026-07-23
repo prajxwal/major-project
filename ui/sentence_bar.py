@@ -62,7 +62,7 @@ class SentenceBar(QWidget):
         layout.setContentsMargins(20, 10, 20, 10)
         
         self._label = QLabel("")
-        self._label.setFont(QFont("Segoe UI", 28, QFont.Weight.Normal))
+        self._label.setFont(QFont("Roboto Mono", 28, QFont.Weight.Normal))
         self._label.setStyleSheet("""
             QLabel {
                 color: #e0e4f0;

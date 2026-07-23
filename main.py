@@ -16,12 +16,20 @@ Usage:
     python main.py
 """
 
+import os
 import sys
+
+# Force UTF-8 stdout/stderr on Windows so Unicode emoji in print() never crash.
+if sys.stdout and hasattr(sys.stdout, 'reconfigure'):
+    sys.stdout.reconfigure(encoding='utf-8', errors='replace')
+if sys.stderr and hasattr(sys.stderr, 'reconfigure'):
+    sys.stderr.reconfigure(encoding='utf-8', errors='replace')
+
 import numpy as np
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                               QHBoxLayout, QStackedWidget, QLabel, QFrame)
 from PyQt6.QtCore import Qt, QTimer, QPoint, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QScreen, QImage, QPixmap
+from PyQt6.QtGui import QFont, QColor, QScreen, QImage, QPixmap, QFontDatabase
 
 from gaze.tracker import GazeTracker
 from gaze.calibration import CalibrationScreen
@@ -33,6 +41,7 @@ from ui.quick_phrases import QuickPhrasesPanel
 from ui.settings_panel import SettingsPanel
 from ui.context_bar import ContextBar
 from ui.conversation_panel import ConversationPanel
+from ui.emergency_screen import EmergencyScreen
 from prediction.predictor import WordPredictor
 from prediction.abbreviation_expander import AbbreviationExpander
 from prediction.conversation_engine import ConversationEngine
@@ -53,8 +62,8 @@ class WebcamWidget(QLabel):
             }
         """)
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.setText("📷 Webcam")
-        self.setFont(QFont("Segoe UI", 10))
+        self.setText("Webcam")
+        self.setFont(QFont("Roboto Mono", 10))
         self.setStyleSheet(self.styleSheet() + "color: #666;")
     
     def update_frame(self, frame):
@@ -126,7 +135,8 @@ class GazeSpeakApp(QMainWindow):
         self._apply_theme()
         
         # Set up alert notification UI callback
-        self._blink_alert.set_alert_callback(self._show_alert_notification)
+        self._blink_alert.set_alert_callback(self._show_emergency_screen)
+        self._blink_alert.set_sms_status_callback(self._on_sms_status_update)
     
     def _setup_ui(self):
         """Build the main UI layout."""
@@ -153,7 +163,7 @@ class GazeSpeakApp(QMainWindow):
         
         # Tracking status indicator
         self._status_indicator = QLabel("● Tracking")
-        self._status_indicator.setFont(QFont("Segoe UI", 11))
+        self._status_indicator.setFont(QFont("Roboto Mono", 11))
         self._status_indicator.setStyleSheet("color: #50c878; padding: 8px;")
         self._status_indicator.setFixedWidth(120)
         self._status_indicator.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -188,6 +198,11 @@ class GazeSpeakApp(QMainWindow):
         self._gaze_cursor = GazeCursor(central)
         self._gaze_cursor.setGeometry(0, 0, self.width(), self.height())
         self._gaze_cursor.raise_()  # ensure it's on top
+
+        # --- Emergency screen overlay (hidden by default, covers everything) ---
+        self._emergency_screen = EmergencyScreen(central)
+        self._emergency_screen.setGeometry(0, 0, self.width(), self.height())
+        self._emergency_screen.stop_requested.connect(self._hide_emergency_screen)
     
     def _connect_signals(self):
         """Wire up all signals between components."""
@@ -694,6 +709,7 @@ class GazeSpeakApp(QMainWindow):
                       f"(center_norm={center_norm:.3f})")
 
         # Resume blink alert now that calibration is done
+        self._tracker.reset_blink_state()
         self._blink_alert.resume()
 
         # Reset navigation state so no accidental dwell fires after calibration
@@ -714,6 +730,7 @@ class GazeSpeakApp(QMainWindow):
     def _on_calibration_cancelled(self):
         """Handle calibration cancellation — show app with default thresholds."""
         # Resume blink alert regardless of calibration outcome
+        self._tracker.reset_blink_state()
         self._blink_alert.resume()
         print("[GazeSpeak] Calibration cancelled — using default zone thresholds")
         if self._initial_startup:
@@ -733,10 +750,12 @@ class GazeSpeakApp(QMainWindow):
         """)
     
     def resizeEvent(self, event):
-        """Resize the gaze cursor overlay to match window."""
+        """Resize the gaze cursor overlay and emergency screen to match window."""
         super().resizeEvent(event)
         if hasattr(self, '_gaze_cursor'):
             self._gaze_cursor.setGeometry(0, 0, self.width(), self.height())
+        if hasattr(self, '_emergency_screen'):
+            self._emergency_screen.setGeometry(0, 0, self.width(), self.height())
     
     def keyPressEvent(self, event):
         """Handle keyboard shortcuts (caregiver mode)."""
@@ -751,41 +770,19 @@ class GazeSpeakApp(QMainWindow):
         elif event.key() == Qt.Key.Key_F5:
             self._start_calibration()
     
-    def _show_alert_notification(self, message):
-        """Show emergency alert notification on screen."""
-        # Use QTimer to safely update UI from background thread
-        QTimer.singleShot(0, lambda: self._display_alert_banner(message))
+    def _show_emergency_screen(self, message):
+        """Show the full-screen emergency overlay (thread-safe)."""
+        QTimer.singleShot(0, self._emergency_screen.activate)
     
-    def _display_alert_banner(self, message):
-        """Display a red alert banner at the top of the screen."""
-        alert_banner = QLabel(message)
-        alert_banner.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
-        alert_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        alert_banner.setStyleSheet("""
-            QLabel {
-                background-color: #ff2040;
-                color: white;
-                padding: 16px;
-                border-radius: 0;
-                font-size: 18px;
-            }
-        """)
-        alert_banner.setFixedHeight(60)
-        
-        # Insert at top of main layout
-        main_layout = self.centralWidget().layout()
-        main_layout.insertWidget(0, alert_banner)
-        
-        # Auto-remove after 10 seconds
-        QTimer.singleShot(10000, lambda: self._remove_alert_banner(alert_banner))
+    def _hide_emergency_screen(self):
+        """Hide the emergency overlay and stop the alarm (called by STOP button)."""
+        self._blink_alert.stop_alarm()
+        self._emergency_screen.deactivate()
+        print("[GazeSpeak] Emergency screen dismissed by user")
     
-    def _remove_alert_banner(self, banner):
-        """Remove the alert banner from the layout."""
-        try:
-            banner.setParent(None)
-            banner.deleteLater()
-        except RuntimeError:
-            pass  # widget already deleted
+    def _on_sms_status_update(self, status: str):
+        """Route SMS status update to the emergency screen (thread-safe)."""
+        QTimer.singleShot(0, lambda: self._emergency_screen.update_sms_status(status))
     
     def closeEvent(self, event):
         """Clean up on close."""
@@ -798,8 +795,15 @@ class GazeSpeakApp(QMainWindow):
 def main():
     app = QApplication(sys.argv)
     
+    # Load custom Roboto Mono fonts
+    font_dir = os.path.join(os.path.dirname(__file__), "fonts")
+    if os.path.exists(font_dir):
+        for font_file in os.listdir(font_dir):
+            if font_file.endswith(".ttf"):
+                QFontDatabase.addApplicationFont(os.path.join(font_dir, font_file))
+    
     # Set application-wide font
-    app.setFont(QFont("Segoe UI", 12))
+    app.setFont(QFont("Roboto Mono", 12))
     
     # Global dark palette
     app.setStyle("Fusion")

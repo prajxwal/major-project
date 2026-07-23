@@ -244,10 +244,10 @@ class ConversationPanel(QWidget):
         action_y = cards_y + cards_h + pad
         action_h = 44
         actions = [
-            ("🔄 More Options", "more"),
-            ("⌨  Type Instead", "type"),
-            ("↩  Back", "back"),
-            ("🔊 Speak Now", "speak"),
+            ("More Options", "more"),
+            ("Type Instead", "type"),
+            ("Back", "back"),
+            ("\U0001f50a Speak Now", "speak"),
         ]
         btn_w = (w - pad * (len(actions) + 1)) / len(actions)
         self._action_rects = []
@@ -288,10 +288,10 @@ class ConversationPanel(QWidget):
         else:
             # Draw cards
             self._draw_card(painter, self._left_card_rect, self._left_text,
-                            "LEFT", "👈", self._card_left_color,
+                            "LEFT", "[<-]", self._card_left_color,
                             self._card_hover_left, self._accent_blue)
             self._draw_card(painter, self._right_card_rect, self._right_text,
-                            "RIGHT", "👉", self._card_right_color,
+                            "RIGHT", "[->]", self._card_right_color,
                             self._card_hover_right, self._accent_purple)
 
             # Draw "OR" divider
@@ -305,14 +305,14 @@ class ConversationPanel(QWidget):
     def _draw_empty_state(self, painter, w, h):
         """Draw placeholder when no conversation is active."""
         painter.setPen(QColor(70, 75, 100))
-        painter.setFont(QFont("Segoe UI", 18, QFont.Weight.Light))
+        painter.setFont(QFont("Roboto Mono", 18, QFont.Weight.Light))
         painter.drawText(
             QRectF(0, h * 0.3, w, 40),
             Qt.AlignmentFlag.AlignCenter,
             "Waiting for caretaker to ask a question...",
         )
         painter.setPen(QColor(50, 55, 75))
-        painter.setFont(QFont("Segoe UI", 13))
+        painter.setFont(QFont("Roboto Mono", 13))
         painter.drawText(
             QRectF(0, h * 0.3 + 50, w, 30),
             Qt.AlignmentFlag.AlignCenter,
@@ -331,15 +331,15 @@ class ConversationPanel(QWidget):
 
         # Icon + text
         painter.setPen(QColor(140, 150, 200))
-        painter.setFont(QFont("Segoe UI", 11))
+        painter.setFont(QFont("Roboto Mono", 11))
         painter.drawText(
             QRectF(rect.x() + 16, rect.y(), 100, rect.height()),
             Qt.AlignmentFlag.AlignVCenter,
-            "🗣 Caretaker:",
+            "Caretaker:",
         )
 
         painter.setPen(self._text_color)
-        painter.setFont(QFont("Segoe UI", 15, QFont.Weight.DemiBold))
+        painter.setFont(QFont("Roboto Mono", 15, QFont.Weight.DemiBold))
         text_rect = QRectF(
             rect.x() + 130, rect.y(), rect.width() - 146, rect.height()
         )
@@ -356,9 +356,9 @@ class ConversationPanel(QWidget):
 
         rect = self._trail_rect
         painter.setPen(QColor(90, 95, 120))
-        painter.setFont(QFont("Segoe UI", 10))
+        painter.setFont(QFont("Roboto Mono", 10))
 
-        trail_str = "  →  ".join(self._selections)
+        trail_str = "  ->  ".join(self._selections)
         painter.drawText(
             QRectF(rect.x() + 12, rect.y(), rect.width() - 24, rect.height()),
             Qt.AlignmentFlag.AlignVCenter,
@@ -408,7 +408,7 @@ class ConversationPanel(QWidget):
 
         # Direction arrow at top
         painter.setPen(self._dim_text if not is_hovered else self._text_color)
-        painter.setFont(QFont("Segoe UI", 22))
+        painter.setFont(QFont("Roboto Mono", 20))
         arrow_rect = QRectF(rect.x(), rect.y() + 16, rect.width(), 40)
         painter.drawText(arrow_rect, Qt.AlignmentFlag.AlignCenter, arrow)
 
@@ -417,7 +417,7 @@ class ConversationPanel(QWidget):
         painter.setPen(
             accent.lighter(130) if is_hovered else QColor(80, 85, 110)
         )
-        painter.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+        painter.setFont(QFont("Roboto Mono", 10, QFont.Weight.Bold))
         label_rect = QRectF(rect.x(), rect.y() + 52, rect.width(), 20)
         painter.drawText(label_rect, Qt.AlignmentFlag.AlignCenter, label)
 
@@ -431,7 +431,7 @@ class ConversationPanel(QWidget):
         font_size = max(14, min(24, int(rect.width() / max(len(text), 1) * 1.2)))
         font_size = min(font_size, 24)
         painter.setFont(
-            QFont("Segoe UI", font_size, QFont.Weight.Bold)
+            QFont("Roboto Mono", font_size, QFont.Weight.Bold)
         )
         text_area = QRectF(
             rect.x() + 20, rect.y() + rect.height() * 0.35,
@@ -499,14 +499,14 @@ class ConversationPanel(QWidget):
         painter.drawPath(badge_path)
 
         painter.setPen(QColor(120, 130, 170))
-        painter.setFont(QFont("Segoe UI", 11, QFont.Weight.Bold))
+        painter.setFont(QFont("Roboto Mono", 11, QFont.Weight.Bold))
         painter.drawText(badge_rect, Qt.AlignmentFlag.AlignCenter, "OR")
 
     def _draw_loading(self, painter, w, h):
         """Draw loading animation while LLM generates options."""
         center_y = (self._left_card_rect.top() + self._left_card_rect.bottom()) / 2
         painter.setPen(QColor(120, 130, 170))
-        painter.setFont(QFont("Segoe UI", 16, QFont.Weight.Light))
+        painter.setFont(QFont("Roboto Mono", 16, QFont.Weight.Light))
         painter.drawText(
             QRectF(0, center_y - 30, w, 30),
             Qt.AlignmentFlag.AlignCenter,
@@ -549,16 +549,16 @@ class ConversationPanel(QWidget):
 
         # "Ready to speak" label
         painter.setPen(QColor(80, 200, 120))
-        painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
+        painter.setFont(QFont("Roboto Mono", 12, QFont.Weight.Bold))
         painter.drawText(
             QRectF(card_rect.x(), card_rect.y() + 16, card_rect.width(), 24),
             Qt.AlignmentFlag.AlignCenter,
-            "✓ Response Ready",
+            "Response Ready",
         )
 
         # Response text
         painter.setPen(QColor(240, 245, 255))
-        painter.setFont(QFont("Segoe UI", 20, QFont.Weight.DemiBold))
+        painter.setFont(QFont("Roboto Mono", 20, QFont.Weight.DemiBold))
         text_rect = QRectF(
             card_rect.x() + 30, card_rect.y() + 50,
             card_rect.width() - 60, card_rect.height() - 80,
@@ -571,12 +571,12 @@ class ConversationPanel(QWidget):
 
         # Hint
         painter.setPen(QColor(80, 200, 120, 150))
-        painter.setFont(QFont("Segoe UI", 11))
+        painter.setFont(QFont("Roboto Mono", 11))
         painter.drawText(
             QRectF(card_rect.x(), card_rect.bottom() - 30,
                    card_rect.width(), 24),
             Qt.AlignmentFlag.AlignCenter,
-            "Click 🔊 Speak Now to say this aloud",
+            "Click \U0001f50a Speak Now to say this aloud",
         )
 
     def _draw_actions(self, painter):
@@ -602,7 +602,7 @@ class ConversationPanel(QWidget):
 
             # Label
             painter.setPen(QColor(180, 185, 210))
-            painter.setFont(QFont("Segoe UI", 11))
+            painter.setFont(QFont("Roboto Mono", 11))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, label)
 
     # ─── Mouse fallback (caregiver mode) ────────────────────────

@@ -160,7 +160,7 @@ class PredictionBar(QWidget):
         if not self._button_rects:
             # Draw placeholder text
             painter.setPen(QColor(80, 80, 110))
-            painter.setFont(QFont("Segoe UI", 14))
+            painter.setFont(QFont("Roboto Mono", 14))
             painter.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter,
                            "Start typing to see suggestions...")
             painter.end()
@@ -202,7 +202,7 @@ class PredictionBar(QWidget):
                           else QColor(200, 210, 230))
             font_size = 12 if self._is_long_text else 16
             weight = QFont.Weight.Bold if is_highlighted else QFont.Weight.Medium
-            painter.setFont(QFont("Segoe UI", font_size, weight))
+            painter.setFont(QFont("Roboto Mono", font_size, weight))
             painter.setPen(text_color)
             
             # Elide text if too long for the button

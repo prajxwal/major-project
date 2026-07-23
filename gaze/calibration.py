@@ -73,25 +73,25 @@ class CalibrationScreen(QWidget):
         # Instruction label
         self._instruction_label = QLabel(self)
         self._instruction_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._instruction_label.setFont(QFont("Segoe UI", 26, QFont.Weight.Light))
+        self._instruction_label.setFont(QFont("Roboto Mono", 26, QFont.Weight.Light))
         self._instruction_label.setStyleSheet("color: #b0b4d0; background: transparent;")
         
         # Sub-instruction label
         self._sub_label = QLabel(self)
         self._sub_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._sub_label.setFont(QFont("Segoe UI", 14))
+        self._sub_label.setFont(QFont("Roboto Mono", 14))
         self._sub_label.setStyleSheet("color: #5a5e78; background: transparent;")
         
         # Progress label
         self._progress_label = QLabel(self)
         self._progress_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._progress_label.setFont(QFont("Segoe UI", 13))
+        self._progress_label.setFont(QFont("Roboto Mono", 13))
         self._progress_label.setStyleSheet("color: #50c878; background: transparent;")
         
         # Live gaze value label (shown during collection)
         self._live_label = QLabel(self)
         self._live_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._live_label.setFont(QFont("Segoe UI", 12))
+        self._live_label.setFont(QFont("Roboto Mono", 12))
         self._live_label.setStyleSheet("color: #7080a0; background: transparent;")
     
     def start_calibration(self):
@@ -141,19 +141,19 @@ class CalibrationScreen(QWidget):
         self._progress = 0.0
         
         if phase == self.PHASE_LEFT:
-            self._instruction_label.setText("👈  Look at the LEFT dot")
+            self._instruction_label.setText("<- Look at the LEFT dot")
             self._sub_label.setText("Keep your gaze steady on the dot...")
             self._progress_label.setText("Step 1 of 3")
             QTimer.singleShot(800, self._begin_collecting)
             
         elif phase == self.PHASE_CENTER:
-            self._instruction_label.setText("👁  Look at the CENTER dot")
+            self._instruction_label.setText("Look at the CENTER dot")
             self._sub_label.setText("Look straight ahead at the center dot...")
             self._progress_label.setText("Step 2 of 3")
             QTimer.singleShot(800, self._begin_collecting)
             
         elif phase == self.PHASE_RIGHT:
-            self._instruction_label.setText("Look at the RIGHT dot  👉")
+            self._instruction_label.setText("Look at the RIGHT dot ->")
             self._sub_label.setText("Keep your gaze steady on the dot...")
             self._progress_label.setText("Step 3 of 3")
             QTimer.singleShot(800, self._begin_collecting)
@@ -188,17 +188,17 @@ class CalibrationScreen(QWidget):
         
         if self._phase == self.PHASE_LEFT:
             self._left_gaze_x = avg_x
-            self._progress_label.setText(f"✓ Left captured ({avg_x:.3f})")
+            self._progress_label.setText(f"Left captured ({avg_x:.3f})")
             QTimer.singleShot(1000, lambda: self._start_phase(self.PHASE_CENTER))
             
         elif self._phase == self.PHASE_CENTER:
             self._center_gaze_x = avg_x
-            self._progress_label.setText(f"✓ Center captured ({avg_x:.3f})")
+            self._progress_label.setText(f"Center captured ({avg_x:.3f})")
             QTimer.singleShot(1000, lambda: self._start_phase(self.PHASE_RIGHT))
             
         elif self._phase == self.PHASE_RIGHT:
             self._right_gaze_x = avg_x
-            self._progress_label.setText(f"✓ Right captured ({avg_x:.3f})")
+            self._progress_label.setText(f"Right captured ({avg_x:.3f})")
             QTimer.singleShot(1000, self._compute_calibration)
     
     def _compute_calibration(self):
@@ -237,7 +237,7 @@ class CalibrationScreen(QWidget):
         self._save_calibration(calibration_data)
         
         self._phase = self.PHASE_DONE
-        self._instruction_label.setText("✓ Calibration Complete!")
+        self._instruction_label.setText("Calibration Complete!")
         self._sub_label.setText(
             f"Left: {self._left_gaze_x:.3f}  |  "
             f"Center: {self._center_gaze_x:.3f}  |  "

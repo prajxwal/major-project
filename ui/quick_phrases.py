@@ -11,7 +11,7 @@ from PyQt6.QtGui import QPainter, QColor, QFont, QLinearGradient, QPainterPath
 
 
 PHRASE_CATEGORIES = {
-    "🔴 Urgent": [
+    "Urgent": [
         "I need help",
         "I'm in pain",
         "Call the nurse",
@@ -19,7 +19,7 @@ PHRASE_CATEGORIES = {
         "I can't breathe",
         "Emergency",
     ],
-    "💊 Medical": [
+    "Medical": [
         "I need medicine",
         "I need water",
         "I need to use the bathroom",
@@ -27,7 +27,7 @@ PHRASE_CATEGORIES = {
         "I need suction",
         "Change my position",
     ],
-    "😊 Social": [
+    "Social": [
         "Thank you",
         "I love you",
         "How are you",
@@ -35,7 +35,7 @@ PHRASE_CATEGORIES = {
         "Tell me about your day",
         "I miss you",
     ],
-    "👍 Quick Response": [
+    "Quick Response": [
         "Yes",
         "No",
         "Maybe",
@@ -43,7 +43,7 @@ PHRASE_CATEGORIES = {
         "Please repeat",
         "I understand",
     ],
-    "🏠 Comfort": [
+    "Comfort": [
         "I'm cold",
         "I'm hot",
         "I'm tired",
@@ -203,8 +203,8 @@ class QuickPhrasesPanel(QWidget):
         path.addRoundedRect(self._back_rect, 8, 8)
         painter.fillPath(path, back_bg)
         painter.setPen(QColor(180, 170, 210))
-        painter.setFont(QFont("Segoe UI", 14))
-        painter.drawText(self._back_rect, Qt.AlignmentFlag.AlignCenter, "← Back")
+        painter.setFont(QFont("Roboto Mono", 14))
+        painter.drawText(self._back_rect, Qt.AlignmentFlag.AlignCenter, "<- Back")
         
         # Draw categories and phrases
         current_category = None
@@ -214,7 +214,7 @@ class QuickPhrasesPanel(QWidget):
                 current_category = category
                 header_rect = QRectF(rect.x(), rect.y() - 38, w, 30)
                 painter.setPen(QColor(160, 165, 190))
-                painter.setFont(QFont("Segoe UI", 15, QFont.Weight.Bold))
+                painter.setFont(QFont("Roboto Mono", 15, QFont.Weight.Bold))
                 painter.drawText(header_rect, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, category)
             
             is_hovered = (i == self._hover_index)
@@ -243,7 +243,7 @@ class QuickPhrasesPanel(QWidget):
             
             text_color = QColor(10, 10, 10) if is_selected else QColor(210, 215, 230)
             painter.setPen(text_color)
-            painter.setFont(QFont("Segoe UI", 13))
+            painter.setFont(QFont("Roboto Mono", 13))
             painter.drawText(rect, Qt.AlignmentFlag.AlignCenter, phrase)
             
             # Dwell ring

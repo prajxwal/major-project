@@ -43,7 +43,7 @@ class SettingsPanel(QWidget):
             QWidget {
                 background-color: #12121e;
                 color: #d0d4e0;
-                font-family: 'Segoe UI';
+                font-family: 'Roboto Mono';
             }
             QGroupBox {
                 border: 1px solid #2a2a4a;
@@ -111,8 +111,8 @@ class SettingsPanel(QWidget):
         layout.setContentsMargins(24, 20, 24, 20)
         
         # Title
-        title = QLabel("⚙  Settings")
-        title.setFont(QFont("Segoe UI", 22, QFont.Weight.Bold))
+        title = QLabel("Settings")
+        title.setFont(QFont("Roboto Mono", 22, QFont.Weight.Bold))
         title.setStyleSheet("color: #e0e4f0; padding-bottom: 8px;")
         layout.addWidget(title)
         
@@ -149,7 +149,7 @@ class SettingsPanel(QWidget):
         gaze_layout.addLayout(smooth_row)
         
         # Calibrate button
-        calibrate_btn = QPushButton("🎯  Recalibrate Eye Tracking")
+        calibrate_btn = QPushButton("Recalibrate Eye Tracking")
         calibrate_btn.setObjectName("calibrate_btn")
         calibrate_btn.clicked.connect(self.recalibrate_requested.emit)
         gaze_layout.addWidget(calibrate_btn)
@@ -200,7 +200,7 @@ class SettingsPanel(QWidget):
         layout.addStretch()
         
         # Close button
-        close_btn = QPushButton("✕  Close Settings")
+        close_btn = QPushButton("X  Close Settings")
         close_btn.setObjectName("close_btn")
         close_btn.clicked.connect(self.close_requested.emit)
         layout.addWidget(close_btn)
