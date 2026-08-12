@@ -27,7 +27,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 MAX_CONVERSATION_HISTORY = 20
-MAX_ROUNDS = 5  # max narrowing rounds before auto-composing
+MAX_ROUNDS = 3  # max narrowing rounds before auto-composing
 
 
 class ConversationEngine:
@@ -292,16 +292,26 @@ class ConversationEngine:
             "Your job is to generate exactly TWO answer options that the patient "
             "can choose between by looking LEFT or RIGHT.\n\n"
 
+            "CRITICAL — MINIMIZE PATIENT EFFORT:\n"
+            "Each selection costs the patient enormous physical effort (eye strain). "
+            "Your #1 goal is to reach a final response in AS FEW ROUNDS AS POSSIBLE.\n"
+            "- For simple yes/no questions: finalize IMMEDIATELY after 1 selection.\n"
+            "  Example: Q='Do you want water?' → Patient picks 'Yes please' → "
+            "  IMMEDIATELY set is_final=true with composed_response='Yes please, I would like some water.'\n"
+            "- For open-ended questions: aim for 2 rounds max (e.g., 'How are you?' → "
+            "  'Not great' → 'I have pain' → FINALIZE).\n"
+            "- NEVER ask unnecessary follow-up details (temperature, container, etc.) "
+            "  unless the caretaker's question specifically asks for them.\n"
+            "- After 2 selections, STRONGLY prefer is_final=true.\n\n"
+
             "RULES:\n"
             "1. Generate exactly 2 options — one for LEFT, one for RIGHT.\n"
             "2. Options should be SHORT (2-6 words each).\n"
             "3. Options should cover the most likely contrasting answers.\n"
             "4. Use the caretaker's question and any prior selections as context.\n"
-            "5. If the patient's intent is clear enough from their selections, "
-            "set is_final=true and provide a composed_response.\n"
-            "6. Prioritize medical, comfort, and daily needs for ALS patients.\n"
-            "7. Options should be distinct and non-overlapping.\n"
-            "8. Keep language simple and direct.\n\n"
+            "5. Prioritize medical, comfort, and daily needs for ALS patients.\n"
+            "6. Options should be distinct and non-overlapping.\n"
+            "7. Keep language simple and direct.\n\n"
 
             "RESPONSE FORMAT (JSON only, no other text):\n"
             "{\n"
@@ -338,11 +348,20 @@ class ConversationEngine:
             for i, sel in enumerate(self._selections, 1):
                 parts.append(f"  Step {i}: \"{sel}\"")
             parts.append("")
-            parts.append(
-                "Generate the next pair of options to narrow down their response. "
-                "If their intent is clear enough, set is_final=true and compose "
-                "the full response."
-            )
+
+            if len(self._selections) >= 2:
+                parts.append(
+                    "The patient has already made multiple selections. "
+                    "Their intent should be clear enough now. "
+                    "SET is_final=true AND compose the full response. "
+                    "Only generate more options if the intent is truly ambiguous."
+                )
+            else:
+                parts.append(
+                    "Generate the next pair of options to narrow down their response. "
+                    "If their intent is already clear (especially for simple yes/no questions), "
+                    "set is_final=true and compose the full response immediately."
+                )
         else:
             parts.append(
                 "Generate the first pair of answer options for the patient to choose from."

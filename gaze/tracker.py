@@ -326,12 +326,10 @@ class GazeTracker(QThread):
             else:
                 screen_x = 0.5
             
-            # Clamp with small margin (allow slight overshoot)
-            screen_x = max(-0.05, min(1.05, screen_x))
+            # Clamp to valid range
             screen_x = max(0.0, min(1.0, screen_x))
             
             # Vertical: simple centering (use raw ratio, center around 0.5)
-            # Most vertical gaze variation is small, so just scale around center
             screen_y = 0.3 + raw_y * 0.4  # compress to middle 40% of screen
             screen_y = max(0.0, min(1.0, screen_y))
             

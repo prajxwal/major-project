@@ -118,10 +118,17 @@ class GazeSpeakApp(QMainWindow):
         self._current_zone = "CENTER"    # committed zone: "LEFT", "CENTER", "RIGHT"
         self._pending_zone = "CENTER"    # zone candidate accumulating hysteresis frames
         self._zone_frame_count = 0       # consecutive frames matching _pending_zone
-        self._HYSTERESIS_FRAMES = 2      # frames required before committing a zone change
+        self._HYSTERESIS_FRAMES = 1      # frames required before committing a zone change
         self._user_has_gestured = False  # True after first deliberate LEFT/RIGHT gesture
 
-        # Gaze zone thresholds (calibrated 0.0–1.0)
+        # ─── Continuous auto-scan state ───
+        self._auto_repeat_timer = QTimer(self)
+        self._auto_repeat_timer.setSingleShot(True)
+        self._auto_repeat_timer.timeout.connect(self._on_auto_repeat)
+        self._auto_repeat_direction = 0       # -1 = left, +1 = right, 0 = stopped
+        self._auto_repeat_interval_ms = 1500  # 1.5 seconds between auto-steps
+
+        # Gaze zone thresholds (updated by calibration)
         self._zone_left = 0.30
         self._zone_right = 0.70
         
@@ -323,26 +330,46 @@ class GazeSpeakApp(QMainWindow):
     def _handle_zone_change(self, prev_zone, new_zone):
         """React to a committed zone transition.
 
-        Gesture model:
-          CENTER → LEFT or RIGHT : one deliberate step, disarm dwell
-          LEFT or RIGHT → CENTER : stop, arm dwell (if user has gestured before)
+        Continuous-scan gesture model:
+          CENTER → LEFT/RIGHT : take one step, start 2-second auto-repeat
+          LEFT/RIGHT → CENTER : stop scanning, arm dwell
+          LEFT ↔ RIGHT        : reverse direction, take one step, restart timer
         """
         if new_zone == "CENTER":
-            # User returned to neutral — stop navigating and arm dwell
+            # User returned to neutral — stop auto-repeat and arm dwell
+            self._auto_repeat_timer.stop()
+            self._auto_repeat_direction = 0
             self._keyboard.set_navigating(False)
             self._prediction_bar.set_navigating(False)
             if self._user_has_gestured:
                 self._keyboard.arm_dwell()
         else:
-            # Deliberate LEFT or RIGHT gesture — one step, dwell disarmed
+            # LEFT or RIGHT — start / change continuous scanning
             self._user_has_gestured = True
             self._keyboard.set_navigating(True)
             self._prediction_bar.set_navigating(True)
             direction = -1 if new_zone == "LEFT" else 1
-            if self._nav_area == "predictions":
-                self._step_prediction(direction)
-            else:
-                self._step_keyboard(direction)
+
+            # Take one immediate step + start auto-repeat timer
+            if self._auto_repeat_direction != direction:
+                self._auto_repeat_direction = direction
+                self._auto_repeat_timer.stop()
+                if self._nav_area == "predictions":
+                    self._step_prediction(direction)
+                else:
+                    self._step_keyboard(direction)
+                self._auto_repeat_timer.start(self._auto_repeat_interval_ms)
+
+    def _on_auto_repeat(self):
+        """Auto-advance one key in the current scan direction (called by timer)."""
+        if self._auto_repeat_direction == 0:
+            return
+        if self._nav_area == "predictions":
+            self._step_prediction(self._auto_repeat_direction)
+        else:
+            self._step_keyboard(self._auto_repeat_direction)
+        # Schedule next auto-step
+        self._auto_repeat_timer.start(self._auto_repeat_interval_ms)
     
     def _step_keyboard(self, direction):
         """Step the keyboard highlight left (-1) or right (+1) with row wrapping."""
@@ -617,6 +644,8 @@ class GazeSpeakApp(QMainWindow):
         self._context_bar.set_conversation_active(False)
         self._stacked.setCurrentIndex(0)
         # Restore keyboard to a safe state — user must gesture before dwell re-arms
+        self._auto_repeat_timer.stop()
+        self._auto_repeat_direction = 0
         self._keyboard.set_navigating(False)
         self._keyboard.disarm_dwell()
         self._user_has_gestured = False
@@ -676,9 +705,9 @@ class GazeSpeakApp(QMainWindow):
         """Apply calibration and compute zone thresholds from center_x."""
         self._tracker.set_calibration(cal_data)
         
-        # Use the calibrated center point to define zone boundaries
-        # After _apply_calibration maps raw→screen, center_norm tells us
-        # where "straight ahead" sits in the 0.0–1.0 screen space.
+        # Compute zone boundaries relative to where center actually maps.
+        # With linear mapping (left→0.0, right→1.0), center maps to center_norm.
+        # Place each zone threshold partway from center to the extreme.
         if isinstance(cal_data, dict) and 'center_x' in cal_data:
             left_x = cal_data['left_x']
             center_x = cal_data['center_x']
@@ -686,21 +715,14 @@ class GazeSpeakApp(QMainWindow):
             span = right_x - left_x
 
             if abs(span) > 0.01:
-                # Map center to 0.0-1.0 calibrated space (same transform the tracker uses)
                 center_norm = (center_x - left_x) / span
                 center_norm = max(0.0, min(1.0, center_norm))
 
-                # Asymmetric proportional margins:
-                # Each side gets 50% of its own half-range as the dead-zone border,
-                # with a minimum floor so both zones are ALWAYS reachable.
-                left_range  = center_norm          # mapped distance from left extreme to center
-                right_range = 1.0 - center_norm   # mapped distance from center to right extreme
-
-                left_margin  = max(left_range  * 0.55, 0.04)  # at least 4% of range
-                right_margin = max(right_range * 0.45, 0.12)  # at least 12% of range
-
-                self._zone_left  = max(0.0, center_norm - left_margin)
-                self._zone_right = min(1.0, center_norm + right_margin)
+                # Place thresholds partway from center to each extreme.
+                # LEFT zone: user must look past 50% of the way from center toward left extreme.
+                # RIGHT zone: user must look past 35% of the way from center toward right extreme.
+                self._zone_left = center_norm * 0.5
+                self._zone_right = center_norm + (1.0 - center_norm) * 0.35
 
                 print(f"[GazeSpeak] Zone thresholds: "
                       f"LEFT < {self._zone_left:.3f} | "
@@ -713,6 +735,8 @@ class GazeSpeakApp(QMainWindow):
         self._blink_alert.resume()
 
         # Reset navigation state so no accidental dwell fires after calibration
+        self._auto_repeat_timer.stop()
+        self._auto_repeat_direction = 0
         self._user_has_gestured = False
         self._current_zone = "CENTER"
         self._pending_zone = "CENTER"

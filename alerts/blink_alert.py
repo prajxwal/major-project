@@ -2,7 +2,7 @@
 alerts/blink_alert.py — Rapid Blink Detection & Emergency Alert System.
 
 Monitors blink events from the gaze tracker. If the user blinks rapidly
-(≥5 blinks within a 4-second window), the system:
+(≥7 blinks within a 2-second window), the system:
   1. Shows a full-screen red emergency overlay
   2. Plays a continuous siren alarm
   3. Sends an SMS to the caregiver via Twilio API
@@ -42,8 +42,8 @@ class BlinkAlertManager:
 
     def __init__(
         self,
-        blink_threshold=5,
-        time_window=4.0,
+        blink_threshold=7,
+        time_window=2.0,
         cooldown=60.0,
         caregiver_phone=None,
         twilio_phone=None,
