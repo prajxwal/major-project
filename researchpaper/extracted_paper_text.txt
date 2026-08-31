@@ -1,0 +1,604 @@
+=== PAGE 1 ===
+GazeSpeak: A Low-Cost, LLM-Accelerated Eye
+Gaze Typing System for ALS Patients
+Chaitra B V
+Dept. of Computer Science and Design
+Dayananda Sagar Academy of Technology and Management
+Bengaluru, Karnataka, India
+cbelvadi21@gmail.com
+G Manjula
+Dept. of Computer Science and Design
+Dayananda Sagar Academy of Technology and Management
+Bengaluru, Karnataka, India
+milindmanjula@gmail.com
+Tanvi Kulkarni
+Dept. of Computer Science and Design
+Dayananda Sagar Academy of Technology and Management
+Bengaluru, Karnataka, India
+tanvikulkarni1435@gmail.com
+Bindhu Madhuri
+Dept. of Computer Science and Design
+Dayananda Sagar Academy of Technology and Management
+Bengaluru, Karnataka, India
+bindhumadhuri06@gmail.com
+Prajwal J
+Dept. of Computer Science and Design
+Dayananda Sagar Academy of Technology and Management
+Bengaluru, Karnataka, India
+reachprajwal03@gmail.com
+Abstract—Amyotrophic Lateral Sclerosis (ALS) progressively
+eliminates voluntary muscle control while typically sparing eye
+movement, making gaze-based text entry one of the few remain-
+ing communication channels for patients in advanced stages of the
+disease. Existing eye-gaze augmentative and alternative commu-
+nication (AAC) systems are often slow, expensive, and dependent
+on dedicated infrared hardware. This paper presents GazeSpeak,
+an open-source, webcam-only assistive eye gaze typing tool that
+combines MediaPipe-based iris tracking, three-point horizontal
+calibration, a step-based gaze-navigation scheme, large language
+model (LLM)-powered word prediction and abbreviation expan-
+sion, an LLM-driven binary-choice conversation engine, rapid-
+blink emergency alerting with SMS notification, and text-to-
+speech output. The system runs on consumer hardware using
+a single webcam and requires no infrared tracker. We describe
+the architecture, implementation, and design rationale of each
+module, and situate the work within recent literature on LLM-
+accelerated gaze typing, calibration-free interfaces, and brain-
+computer interface typing paradigms for ALS. GazeSpeak is
+implemented in Python using PyQt6, OpenCV , and MediaPipe,
+with Groq-hosted Llama 3.3 70B providing LLM capabilities.
+The system is designed to operate across multiple stages of ALS
+progression through its modular, multi-modal input architecture.
+Index Terms—Amyotrophic Lateral Sclerosis, Eye Gaze Typ-
+ing, Augmentative and Alternative Communication, Large Lan-
+guage Models, Assistive Technology, MediaPipe, Webcam-Based
+Tracking.
+I. I NTRODUCTION
+Amyotrophic Lateral Sclerosis (ALS) is a progressive neu-
+rodegenerative disease that destroys motor neurons, gradually
+stripping patients of the ability to speak, move their limbs,
+and eventually breathe independently [3], [9]. Because the
+oculomotor pathways are typically preserved even in advanced
+disease stages, eye gaze has become the primary input modal-
+ity for augmentative and alternative communication (AAC)
+systems used by this population [1], [6].
+Despite decades of research, gaze typing remains slow.
+On-screen keyboards driven by eye trackers typically support
+fewer than ten words per minute, roughly an order of magni-
+tude below conversational speech [6]. This gap discourages
+extended interaction and contributes to the social isolation
+commonly reported among ALS patients [8]. Two additional
+obstacles compound the problem. First, many gaze-tracking
+systems depend on dedicated infrared hardware and lengthy
+calibration procedures that are expensive, difficult for patients
+with restricted head control, and prone to drift [2], [5], [14].
+Second, research on typing acceleration, low-cost tracking,
+brain-computer interfaces (BCI), and voice preservation has
+advanced along mostly separate paths, with comparatively
+little work integrating these advances into a single deployable
+tool tailored to ALS [1].
+Three specific advances motivate this work. LLM-powered
+interfaces have demonstrated 29–60% improvements in text-
+entry rate over baseline keyboards and 57% savings in
+motor actions [1]. Blink-coded alphabet trees have enabled
+calibration-free typing on ordinary webcams [2]. Webcam-
+based deep-learning facial landmark trackers have removed the
+dependence on infrared hardware entirely [5]. BCI paradigms
+offer a fallback modality for patients who progress to a fully
+locked-in state [3], [11].
+This paper presents GazeSpeak, an open-source assistive eye
+gaze typing system that integrates several of these advances
+=== PAGE 2 ===
+into a working, deployable application. The system runs on
+consumer hardware with a single webcam, uses MediaPipe
+Face Mesh for iris tracking, provides LLM-accelerated word
+prediction and abbreviation expansion through Groq-hosted
+Llama 3.3 70B, supports a binary-choice conversation mode
+for patients who find letter-by-letter typing too slow, and
+includes a rapid-blink emergency alert system with SMS
+notification via Twilio. The specific contributions are:
+1) A complete, open-source implementation of a webcam-
+only gaze typing system that requires no infrared hard-
+ware or commercial eye tracker.
+2) A three-point horizontal calibration scheme with IQR-
+based outlier rejection that adapts gaze zone thresholds
+to each patient’s eye movement range.
+3) A step-based gaze navigation model with hysteresis-
+filtered zone transitions, where horizontal eye direction
+acts as discrete left/right arrow keys rather than contin-
+uous cursor control.
+4) Integration of LLM-based word prediction, context-
+aware abbreviation expansion, and a binary-choice con-
+versation engine that reduces the motor effort required
+for communication.
+5) A rapid-blink emergency alert mechanism using Eye
+Aspect Ratio (EAR) blink detection, audible alarm, and
+Twilio SMS notification.
+II. R ELATED WORK
+A. LLM-accelerated gaze typing
+Cai et al. developed SpeakFaster, an LLM-powered interface
+for abbreviated text entry that saved 57% more motor actions
+than traditional predictive keyboards in offline simulation and
+achieved text-entry rates 29–60% above baseline in lab and
+field testing with two eye-gaze AAC users with ALS [1].
+A companion field study instrumented the everyday gaze-
+typed communication of an ALS patient over an extended
+period to characterize real-world conversational patterns [6].
+Car`ıa surveyed the convergence of BCI spellers with LLMs,
+tracing the evolution from early statistical language mod-
+els to contemporary transformer-based predictive writing [7].
+Mirbagheri and Chau presented EyeChat, a gaze-controlled
+web-browsing and chatbot interface for an augmented-reality
+display, reporting 9.88 words per minute with an LLM-driven
+response generation system [16].
+B. Low-cost webcam and blink-based interfaces
+Lee and Lee proposed a blink-to-alphabet tree that narrows
+a 26-letter alphabet through three sequential blink-coded deci-
+sions and integrates an LLM API for error correction, outper-
+forming three baseline methods in speed and accuracy without
+calibration [2]. Karatay et al. developed a webcam-only, deep-
+learning-based facial landmark tracker that eliminates the need
+for blinking, enabling use by patients who can no longer blink
+voluntarily [5]. Molina-Cantero et al. reviewed visible-light,
+low-cost camera eye-tracking methods, cataloguing calibration
+strategies, head-pose invariance techniques, and the persistent
+trade-off between affordability and tracking accuracy [14].
+C. Brain-computer interface typing
+Li et al. conducted a PRISMA-guided review of 23 studies
+applying BCI paradigms to ALS communication, concluding
+that recent multidisciplinary efforts have improved decoding
+precision but that user variability, BCI illiteracy, and fatigue
+remain open limitations [3]. Peters et al. introduced Inquiry
+Preview, a multimodal extension of the RSVP-Keyboard that
+fuses switch input with EEG and language-model evidence; a
+potential end user with incomplete locked-in syndrome typed
+fastest with the combined modality [11]. An NIH-funded
+initiative on a rapid neural typing interface for veterans with
+ALS reflects continued investment in translating BCI-based
+typing toward deployment [15].
+D. Datasets, hardware, and broader communication support
+Ngo et al. released EEGET-ALS, a public EEG and eye-
+tracking dataset from six ALS patients and 170 healthy con-
+trols performing spelling tasks [4]. Liu et al. demonstrated
+a wireless MXene-based smart contact lens that encodes
+blink patterns into a resonance-frequency signal, validating
+biocompatibility in vivo [13]. On the communication support
+side, Garbey et al. developed AI tools combining pulse and
+speech analysis to detect emotional responsiveness during ALS
+clinic visits [8]. Regondi et al. combined voice banking with
+AI voice-cloning to preserve a patient’s vocal identity for
+AAC devices [9]. Barton et al. surveyed AAC specialists
+on tele-AAC versus in-person evaluations for ALS patients
+[10]. A medRxiv study proposed an AI-driven approach to
+augmentative and assistive communication for ALS patients
+[12].
+III. S YSTEM ARCHITECTURE
+GazeSpeak is a desktop application built in Python. The
+system is organized into five modules: gaze tracking, user
+interface, text prediction, emergency alerts, and audio. Fig. 1
+illustrates the data flow between these modules. The appli-
+cation is built on PyQt6 for the GUI, OpenCV for webcam
+capture, MediaPipe Face Mesh for facial landmark detection,
+and Groq-hosted Llama 3.3 70B for LLM capabilities.
+A. Gaze tracking
+The gaze tracker runs as a background QThread, capturing
+webcam frames at 640 ×480 resolution and processing each
+frame through MediaPipe’s Face Landmarker task. The model
+detects 478 facial landmarks per frame, including five iris land-
+marks per eye (indices 468–477). Gaze direction is computed
+as the horizontal and vertical iris ratio: the position of each iris
+center relative to the corresponding eye corners, normalized
+to [0, 1]. The ratios from both eyes are averaged to produce a
+single gaze coordinate.
+A confidence metric is computed from the agreement be-
+tween the two eyes. When iris landmarks are unavailable (e.g.,
+due to occlusion), a fallback method estimates gaze from
+eye corner midpoints at reduced confidence. An exponential
+moving average (EMA) filter smooths the gaze signal before
+it reaches the navigation controller. The smoothing factor is
+=== PAGE 3 ===
+user-configurable, defaulting to 0.25, which balances respon-
+siveness against jitter.
+B. Three-point horizontal calibration
+On each application launch, a full-screen calibration se-
+quence records the patient’s gaze ratio at three horizontal posi-
+tions: fully left, straight ahead (center), and fully right. At each
+position, the system collects 60 gaze samples (approximately
+two seconds at 30 fps), rejects outliers using IQR filtering
+(samples outside Q1−1.5·IQR to Q3+1.5·IQR are discarded),
+and takes the mean of the remaining samples.
+The three recorded values ( xleft, xcenter, xright) are used
+to define zone boundaries. The calibrated screen position
+(screen_x) of a raw gaze reading xraw is given by Eq. (1):
+xscreen = xraw− xleft
+xright− xleft
+(1)
+The center point in calibrated space, c = ( xcenter −
+xleft)/(xright− xleft), is then used to set asymmetric dead-
+zone thresholds ( zone_left and zone_right), as shown
+in Eq. (2) and Eq. (3):
+zleft = max
+ 
+0, c− max(0.55 c, 0.04)
+
+(2)
+zright = min
+ 
+1, c + max(0.45 (1− c), 0.12)
+
+(3)
+The asymmetric margins and minimum floors ensure both
+left and right zones are always reachable regardless of where
+the patient’s neutral gaze falls. Calibration data is validated:
+the spread between left and right must exceed 0.05 in raw gaze
+units, and the center value must lie strictly between them. If
+validation fails, the patient is asked to retry.
+C. Step-based gaze navigation with hysteresis
+Rather than mapping gaze position to a continuous screen
+cursor, GazeSpeak uses a three-zone, step-based navigation
+model. Looking left of zleft triggers a single leftward step of
+the highlight. Looking right of zright triggers a single rightward
+step. Returning to the center zone (between the two thresholds)
+stops navigation and arms dwell-time selection: if the patient’s
+gaze remains centered for a configurable dwell period (default
+1200 ms), the currently highlighted key is selected.
+To prevent false triggers from noisy gaze data, zone tran-
+sitions require confirmation over multiple consecutive frames
+(hysteresis). A zone change is only committed after two con-
+secutive frames (at 30 fps, approximately 66 ms) indicate the
+same new zone. This filters out transient spikes without adding
+perceptible delay. The navigation highlight wraps circularly
+through prediction suggestions and keyboard rows. When the
+highlight moves past the last key in the last keyboard row, it
+wraps to the first prediction slot, and vice versa.
+D. On-screen keyboard and dwell selection
+The keyboard is a QWERTY layout augmented with special
+keys: SPACE, BACKSPACE, SPEAK (triggers TTS), CLEAR,
+PHRASES (switches to the quick-phrases panel), and SET-
+TINGS. Key selection occurs through dwell: when the patient
+returns gaze to the center zone after navigating to the desired
+key, a countdown timer begins. A visual progress ring fills
+around the highlighted key. If gaze remains centered for the
+full dwell duration, the key is pressed. Any zone transition
+cancels the timer.
+E. Word prediction
+GazeSpeak combines two prediction paths running in par-
+allel. Local prefix matching: a frequency-ranked dictionary
+(approximately 300 entries weighted toward medical, comfort,
+and daily-need vocabulary) provides instant completions as the
+patient types. Results are sorted by frequency and filtered to
+exclude exact matches with the current prefix. LLM context-
+aware prediction: in the background, the current sentence and
+partial word are sent to Groq-hosted Llama 3.3 70B via the
+Groq API. The model is prompted to return a JSON array
+of the five most likely word completions, prioritizing ALS
+patient communication context (medical needs, comfort, social
+interaction). When the LLM response arrives, it replaces the
+local predictions in the UI. Temperature is set to 0.3 for
+focused predictions.
+The two-tier approach ensures the patient always sees sug-
+gestions instantly (local), while benefiting from contextually
+smarter predictions when the LLM response returns (typically
+within 200–500 ms).
+F . Context-aware abbreviation expansion
+For patients who prefer to type shorthand, the system detects
+likely abbreviations using a set of heuristics: the input is
+short (≤5 characters), contains few or no vowels relative to
+consonants, and does not match a list of common English short
+words. When an abbreviation is detected, the system sends it
+along with the full conversation history (caretaker questions
+and prior patient responses) to Llama 3.3 70B, which returns
+2–4 plausible expansions ranked by confidence.
+For example, if the caretaker asks “Where did the sound
+come from?” and the patient types “ftk”, the system might
+suggest “from the kitchen”, “from the kids”, or “from the
+terrace”. Each letter in the abbreviation is treated as poten-
+tially the first letter of a word. The LLM response includes
+confidence scores and reasoning for each expansion, and the
+suggestions are ranked by confidence before display.
+G. Binary-choice conversation engine
+For situations where letter-by-letter typing is too slow or
+fatiguing, GazeSpeak provides a conversation mode. When the
+caretaker types or speaks a question (via the context bar at the
+bottom of the screen), the system generates exactly two answer
+options using Llama 3.3 70B. The options are displayed as two
+large cards: one on the left side and one on the right side of
+the screen.
+The patient selects an option by looking in the correspond-
+ing direction (left or right gaze). After each selection, the
+engine generates a follow-up pair that narrows the patient’s
+intended meaning. After up to five rounds of binary nar-
+rowing, the LLM composes a natural spoken sentence from
+the patient’s selection trail and speaks it aloud via TTS. For
+=== PAGE 4 ===
+example, if the caretaker asks “How are you feeling?”, the
+patient might narrow through “Not great” → “I have pain”→
+“In my head” across three rounds, and the system speaks the
+composed sentence “I’m not great. I have pain in my head.”
+This mode requires only three gaze gestures to compose
+a full response, compared to dozens of individual key selec-
+tions for letter-by-letter typing. The patient can also request
+regeneration of options, undo a previous selection, or switch
+to keyboard mode at any point.
+H. Rapid-blink emergency alert
+The gaze tracker continuously computes the Eye Aspect
+Ratio (EAR) for both eyes using six landmark points per eye,
+as shown in Eq. (4):
+EAR =∥p2− p6∥ +∥p3− p5∥
+2∥p1− p4∥ (4)
+where p1–p6 are the outer corner, upper lid (two points), inner
+corner, and lower lid (two points) respectively. A blink is
+registered when the average EAR across both eyes drops below
+0.21 for at least two consecutive frames and then rises above
+the threshold (i.e., the eyes reopen).
+The BlinkAlertManager maintains a sliding window of blink
+timestamps. If five or more blinks occur within a four-second
+window, the system triggers an emergency alert: (1) a full-
+screen red overlay covers the application; (2) a continuous
+siren alarm plays through the system speaker (alternating fre-
+quency sweeps between 800–1200 Hz); (3) an SMS is sent to
+the configured caregiver phone number via the Twilio API. A
+60-second cooldown prevents repeat triggers. Blink detection
+is automatically paused during calibration and resumes with a
+two-second grace period to avoid false positives from residual
+calibration blinks.
+I. Caregiver mode and speech-to-text input
+The caregiver interacts through a context bar at the bottom
+of the screen. The caregiver can type a question directly
+via the physical keyboard or use speech-to-text (AssemblyAI
+real-time streaming API) to dictate their question verbally.
+The transcribed or typed question is then fed to both the
+abbreviation expander (as context) and the conversation engine
+(as the prompt for binary-choice generation). The application
+also supports full keyboard and mouse input for caregiver-side
+configuration, settings adjustment, and recalibration.
+J. Text-to-speech output
+Composed sentences, quick phrases, and conversation-mode
+responses are spoken aloud using the pyttsx3 offline TTS
+engine. Speech rate is user-configurable through the settings
+panel.
+IV. I MPLEMENTATION DETAILS
+Table I summarizes the technology stack. The application
+is open-source and runs on Windows with Python 3.10+.
+The codebase is organized into five Python packages:
+gaze/ — gaze tracker (background QThread) and calibration
+screen; ui/ — nine PyQt6 widget modules (keyboard, gaze
+TABLE I
+TECHNOLOGY STACK
+Layer Library Version
+GUI framework PyQt6 ≥6.6.0
+Webcam capture OpenCV ≥4.8.0
+Face/iris track-
+ing
+MediaPipe ≥0.10.9
+Numerical com-
+putation
+NumPy ≥1.24.0
+LLM inference Groq (Llama 3.3 70B) ≥1.0.0
+Text-to-speech pyttsx3 ≥2.90
+Emergency SMS Twilio ≥9.0.0
+Speech-to-text AssemblyAI ≥0.30.0
+TABLE II
+FEATURE COMPARISON WITH SURVEYED SYSTEMS
+Feature SF [1] B2A [2] WCI [5] GS
+Webcam-only × ✓ ✓ ✓
+LLM prediction ✓ ✓ × ✓
+Abbreviation expansion ✓ × × ✓
+Conversation mode × × × ✓
+Emergency alert × × × ✓
+Caregiver input × × × ✓
+Calibration-free × ✓ × ×
+Open-source ✓ N/A N/A ✓
+SF = SpeakFaster, B2A = Blink-to-Alphabet Tree, WCI = Webcam Interface, GS =
+GazeSpeak (this work).
+cursor, sentence bar, prediction bar, quick phrases, settings
+panel, context bar, conversation panel, and emergency screen);
+prediction/ — word predictor (local + LLM), abbrevia-
+tion expander, conversation engine, and the frequency-ranked
+dictionary; alerts/ — rapid-blink detection and Twilio
+SMS emergency alert system; audio/ — AssemblyAI-based
+real-time speech-to-text for caregiver input.
+Threading model: the gaze tracker runs as a dedicated
+QThread, emitting Qt signals for gaze updates, frame readi-
+ness, tracking loss, and blink events. LLM calls (word pre-
+diction, abbreviation expansion, conversation options, and
+response composition) run in daemon threads to avoid block-
+ing the GUI. Results are marshalled back to the main
+thread via QTimer.singleShot(0, ...) or a dedicated
+pyqtSignal.
+The system operates without an internet connection for basic
+gaze typing, dwell selection, local word prediction, TTS, and
+emergency alarm. Internet connectivity is required only for
+LLM-based prediction, abbreviation expansion, conversation
+mode, SMS alerts, and speech-to-text.
+V. D ISCUSSION
+A. Relation to prior work
+Table II compares GazeSpeak’s feature set with the systems
+described in the surveyed literature.
+GazeSpeak is, to our knowledge, the first system to com-
+bine webcam-only iris tracking, LLM-accelerated prediction,
+context-aware abbreviation expansion, a binary-choice conver-
+sation engine, and emergency blink alerting in a single open-
+=== PAGE 5 ===
+Webcam (640×480 @ 30 fps)
+MediaPipe Face Landmarker (478 landmarks + iris)
+Gaze Tracker (iris ratio computation + EAR blink detection)
+3-Point Calibration (left / center / right → zone thresholds)
+Zone Classifier (LEFT / CENTER / RIGHT with hysteresis)
+Navigation Controller (step keyboard / predictions)
+Keyboard Widget (QWERTY + dwell selection)
+Prediction Layer
+(a) Local prefix matching
+(offline dictionary)
+(b) LLM word prediction
+(Groq / Llama 3.3 70B)
+(c) Abbreviation expander
+(context-aware)
+(d) Binary conversation engine
+(LLM-driven)
+Output: Text-to-Speech (pyttsx3) + Emergency SMS (Twilio)
+Fig. 1. Data flow through the GazeSpeak pipeline.
+source tool for ALS patients. SpeakFaster [1] demonstrated
+that LLM acceleration reduces motor actions by 57%; GazeS-
+peak applies a similar principle using Groq-hosted Llama 3.3
+70B for both word prediction and abbreviation expansion. The
+blink-to-alphabet tree [2] showed that calibration-free typing
+is feasible with LLM error correction; while GazeSpeak still
+requires a brief calibration, the three-point procedure takes
+approximately ten seconds and adapts to each patient’s range.
+The binary-choice conversation engine is a contribution not
+present in any of the surveyed systems. It reduces a full
+sentence response to three to five gaze gestures, which is
+particularly useful for patients whose fatigue limits sustained
+letter-by-letter typing. The emergency blink alert addresses a
+safety concern raised in multiple care-focused studies [8], [10]:
+patients who lose the ability to call for help need a hands-free,
+gaze-compatible alarm mechanism.
+B. Design decisions
+Several design choices warrant discussion.
+Step-based versus continuous cursor. Continuous gaze-to-
+cursor mapping is the approach used by most commercial
+eye trackers [14]. We chose step-based navigation because
+webcam-only iris tracking lacks the spatial precision of in-
+frared systems. By discretizing gaze into three zones, the
+system tolerates tracking noise that would make continuous
+cursor control impractical. The trade-off is slower maximum
+throughput, since each key requires at least one zone transition.
+Hysteresis filtering. A two-frame hysteresis requirement
+(approximately 66 ms at 30 fps) prevents false zone transitions
+caused by momentary tracking noise, without adding percepti-
+ble delay. This is simpler than the Kalman filtering sometimes
+used in gaze tracking [14] and sufficient for the three-zone
+model.
+Asymmetric zone thresholds. The calibration-derived thresh-
+olds use different margin ratios for the left (55%) and right
+(45%) sides, with minimum floors of 4% and 12% respectively.
+This accounts for the observation that most users have slightly
+asymmetric gaze ranges, and ensures both zones are reachable
+even with a skewed neutral gaze position.
+LLM model choice. We use Llama 3.3 70B via the Groq API
+because it provides sub-second inference latency with reason-
+able cost, making it practical for real-time typing assistance.
+The system degrades gracefully without internet: local prefix
+matching continues to function.
+C. Limitations
+GazeSpeak has not yet been evaluated in a formal user study
+with ALS patients. The system requires a three-point calibra-
+tion on each launch, which may be difficult for patients with
+very restricted eye movement range. The binary conversation
+engine depends on the LLM generating appropriate and non-
+harmful options, which is not guaranteed. The emergency blink
+alert uses a fixed threshold (five blinks in four seconds) that
+may need per-patient tuning to avoid false positives in patients
+with abnormal blink patterns. The step-based navigation model
+trades typing speed for robustness to tracking noise, and the
+system’s throughput has not been formally measured against
+commercial eye trackers.
+VI. C ONCLUSION
+GazeSpeak combines four things that have mostly been
+studied separately in prior work — webcam-only iris track-
+=== PAGE 6 ===
+ing, LLM-accelerated prediction, a binary-choice conversation
+mode, and blink-triggered emergency alerting — into a single
+deployable tool that a patient can run on ordinary consumer
+hardware. None of its individual components is entirely new:
+LLM-accelerated typing, calibration-free interfaces, and BCI
+fallback paradigms have each been demonstrated before [1]–
+[3], [11]. What has been missing, and what this paper con-
+tributes, is the integration: a system a caregiver could actually
+install and use today, without infrared hardware or a research
+lab.
+That gap between “demonstrated in the literature” and
+“usable by a patient” is also where the open questions sit.
+The three-point calibration, the fixed blink-alert threshold, and
+the step-based navigation model were all built as reasonable
+defaults rather than values tuned against real patients, and the
+paper is explicit about that in the limitations above. The next
+step is a controlled user study with ALS patients to measure
+typing speed, error rate, and user satisfaction against those
+defaults, followed by work on a BCI fallback channel for
+patients who progress to a locked-in state.
+REFERENCES
+[1] S. Cai, S. Venugopalan, K. Seaver, X. Xiao, K. Tomanek, S. Jalasutram,
+M. R. Morris, S. Kane, A. Narayanan, R. L. MacDonald, E. Kornman,
+D. Vance, B. Casey, S. M. Gleason, P. Q. Nelson, and M. P. Brenner,
+“Using large language models to accelerate communication for eye gaze
+typing users with ALS,”Nature Communications, vol. 15, art. 9449, Nov.
+2024. [Online]. Available: https://pubmed.ncbi.nlm.nih.gov/39487163/
+[2] S. Lee and S. Lee, “Text typing using blink-to-alphabet tree for patients
+with neuro-locomotor disabilities,” Sensors, vol. 25, no. 15, art. 4555,
+Jul. 2025. [Online]. Available: https://www.mdpi.com/1424-8220/25/15/
+4555
+[3] T. Li, Y . Gao, J. Zhou, Y . Chen, S. Zhang, X. Gong, and Y . Liu,
+“Advancements in the application of brain-computer interfaces based
+on different paradigms in amyotrophic lateral sclerosis,” Frontiers
+in Neuroscience , vol. 19, art. 1658315, Dec. 2025. [Online]. Avail-
+able: https://www.frontiersin.org/journals/neuroscience/articles/10.3389/
+fnins.2025.1658315/full
+[4] T. D. Ngo, H. D. Kieu, M. H. Nguyen, T. Hoang-Anh Nguyen, V . M.
+Can, B. H. Nguyen, and T. H. Le, “An EEG & eye-tracking dataset
+of ALS patients & healthy people during eye-tracking-based spelling
+system usage,” Scientific Data , vol. 11, art. 664, Jun. 2024. [Online].
+Available: https://www.nature.com/articles/s41597-024-03501-y
+[5] R. Karatay et al., “A real-time eye movement-based computer interface
+for people with amyotrophic lateral sclerosis,” Array, ScienceDirect,
+Oct. 2024. [Online]. Available: https://www.sciencedirect.com/science/
+article/abs/pii/S2352648324000771
+[6] S. Cai, S. Venugopalan, K. Tomanek, S. K. Kane, M. R. Morris, R. Cave,
+R. MacDonald, J. Campbell, B. Casey, E. Kornman, D. E. Vance, and
+J. Beavers, “SpeakFaster Observer: Long-term instrumentation of eye-
+gaze typing for measuring AAC communication,” in Extended Abstracts
+of the 2023 CHI Conference on Human Factors in Computing Systems ,
+Hamburg, Germany, Apr. 2023. [Online]. Available: https://dl.acm.org/
+doi/abs/10.1145/3544549.3573870
+[7] A. Car `ıa, “Towards predictive communication: The fusion of large
+language models and brain-computer interface,” Sensors, vol. 25, no.
+13, art. 3987, Jun. 2025. [Online]. Available: https://www.mdpi.com/
+1424-8220/25/13/3987
+[8] M. Garbey, Q. Lesport, G. Oztosun, V . Ghodasara, H. J. Kaminski,
+and E. Bayat, “Improving care for amyotrophic lateral sclerosis with
+artificial intelligence and affective computing,” Journal of the Neuro-
+logical Sciences, vol. 468, art. 123328, Nov. 2024. [Online]. Available:
+https://www.sciencedirect.com/science/article/pii/S0022510X24004647
+[9] S. Regondi, G. Donvito, E. Frontoni, M. Kostovic, F. Minazzi, S.
+Bratieres, M. Filosto, and R. Pugliese, “Artificial intelligence em-
+powered voice generation for amyotrophic lateral sclerosis patients,”
+Scientific Reports , vol. 15, art. 1361, Jan. 2025. [Online]. Available:
+https://www.nature.com/articles/s41598-024-84728-y
+[10] M. Barton, A. Roman, K. Spencer, L. Cheng, and C. Baylor, “Examining
+the perspectives of augmentative and alternative communication (AAC)
+specialists on conducting AAC evaluations with people with ALS via
+telehealth,” Augmentative and Alternative Communication , vol. 41, no.
+2, pp. 169–182, Jan. 2025. [Online]. Available: https://www.tandfonline.
+com/doi/abs/10.1080/07434618.2024.2443669
+[11] B. Peters, B. Celik, D. Gaines, D. Galvin-McLaughlin, T. Imbiriba, M.
+Kinsella, D. Klee, M. Lawhead, T. Memmott, N. Smedemark-Margulies,
+J. Wiedrick, D. Erdogmus, B. Oken, K. Vertanen, and M. Fried-Oken,
+“RSVP Keyboard with Inquiry Preview: Mixed performance and user
+experience with an adaptive, multimodal typing interface combining
+EEG and switch input,” Journal of Neural Engineering , vol. 22, no. 1,
+art. 016022, Feb. 2025. [Online]. Available: https://iopscience.iop.org/
+article/10.1088/1741-2552/ada8e0
+[12] “An artificial intelligence approach to augmentative and assistive com-
+munication for patients with amyotrophic lateral sclerosis,” medRxiv,
+preprint, Sep. 2025. [Online]. Available: https://www.medrxiv.org/
+content/10.1101/2025.09.24.25336481v1.full-text
+[13] H. Liu, W. Liu, Z. Du, L. Wu, M. Chen, Z. Gao, K. Jiang, L. Li, Z.
+Fan, and G. Shen, “Encoding of blink information via wireless contact
+lens for eye-machine interaction,” National Science Review, vol. 12, no.
+10, art. nwaf338, Oct. 2025. [Online]. Available: https://academic.oup.
+com/nsr/article/12/10/nwaf338/7928537
+[14] A. J. Molina-Cantero, C. Lebrato-V ´azquez, J. A. Castro-Garc ´ıa, M.
+Merino-Monge, F. Biscarri-Trivino, and J. Escudero-Fombuena, “A re-
+view on visible-light eye-tracking methods based on a low-cost camera,”
+Journal of Ambient Intelligence and Humanized Computing , vol. 15, no.
+4, pp. 2381–2397, Mar. 2024. [Online]. Available: https://link.springer.
+com/article/10.1007/s12652-024-04760-8
+[15] NIH-funded project, “Rapid neural typing interface for
+veterans with ALS,” NIH RePORTER, project no. 11052613,
+2024. [Online]. Available: https://reporter.nih.gov/search/
+Vr9Nps1TCU-NJNHdXH2xmQ/project-details/11052613
+[16] M. Mirbagheri and T. Chau, “EyeChat: An eye-gaze-controlled web-
+browsing system for head-mounted augmented reality displays,” IEEE
+Access, vol. 13, pp. 158409–158422, 2025. [Online]. Available: https:
+//ieeexplore.ieee.org/abstract/document/11153415/

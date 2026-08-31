@@ -11,6 +11,8 @@
 \usepackage{multirow}
 \usepackage{array}
 \usepackage{hyperref}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18}
 
 \def\BibTeX{{\rm B\kern-.05em{\sc i\kern-.025em b}\kern-.08em
     T\kern-.1667em\lower.7Eex\hbox{E}\kern-.125emX}}
@@ -55,7 +57,24 @@ tanvikulkarni.work@gmail.com}
 \maketitle
 
 \begin{abstract}
-Patients suffering from severe neurodegenerative diseases such as Amyotrophic Lateral Sclerosis (ALS), Locked-in Syndrome (LIS), or brainstem stroke experience profound loss of voluntary motor and vocal capabilities, leaving eye movements as their sole channel for communication. Existing Augmentative and Alternative Communication (AAC) solutions either demand prohibitively expensive specialized hardware (\$5,000--\$15,000 infrared eye trackers) or impose continuous 2D mouse cursor pointing that causes severe visual strain and frequent false activations (the ``Midas Touch'' problem). To resolve these barriers, we propose \textbf{GazeSpeak}, a software-only, highly accessible AAC framework operating on standard consumer RGB webcams without infrared illumination. GazeSpeak introduces a discrete \textbf{step-based horizontal gaze navigation scheme} backed by MediaPipe's 478-landmark 3D Face Landmarker for sub-pixel iris center estimation. The framework incorporates a fast \textbf{3-point horizontal calibration protocol} with Interquartile Range (IQR) outlier filtering, a temporal hysteresis state machine ($N=2$ frames) to suppress micro-saccadic noise, and a neutral-center dwell arming mechanism that prevents accidental selection while scanning. Furthermore, GazeSpeak integrates a multi-tiered language engine featuring an instant local frequency dictionary, context-aware abbreviation expansion (e.g., ``ftk'' $\rightarrow$ ``from the kitchen''), and an interactive binary decision-tree conversation mode powered by Groq Llama-3.3 70B LLM inference. An integrated Eye Aspect Ratio (EAR) monitoring module detects rapid blink patterns ($\ge 5$ blinks in 4 seconds) to trigger an immediate emergency siren and automated caregiver SMS notification via Twilio. Experimental evaluations demonstrate real-time processing performance (18.4 ms/frame @ 30 fps), an emergency blink detection F1-score of 0.914, a Keystroke Savings (KSS) rate of up to 68.5\%, and a communication speedup from 2.8 WPM (raw gaze typing) to 11.4 WPM with LLM expansion and 22.5 WPM in binary conversation mode.
+ALS, Locked-in Syndrome, and brainstem stroke leave eye movement as the only remaining motor
+channel for many patients. Commercial eye-gaze AAC systems cost \$5,000--\$15,000 and require
+infrared hardware. Cheaper webcam-based alternatives suffer from the ``Midas Touch'' problem:
+because gaze naturally scans the screen, continuous 2D cursor mapping fires accidental key presses
+constantly. This paper presents GazeSpeak, a software-only AAC system that runs on a standard RGB
+webcam. Instead of a continuous cursor, gaze is mapped to three discrete horizontal zones.
+Looking left or right steps the keyboard highlight by one key; looking straight ahead arms a
+dwell timer that selects the highlighted key after 800\,ms. A three-point calibration, completed
+in under ten seconds, sets personalized zone thresholds using IQR outlier filtering. A hysteresis
+filter ($N=2$ frames) stops brief eye flinches from triggering steps. For text entry, GazeSpeak
+uses a local frequency dictionary for instant completions and Groq Llama-3.3 70B for
+context-aware word prediction and abbreviation expansion (e.g., ``ftk'' to ``from the kitchen'').
+A binary conversation mode lets a caregiver ask a question; the LLM generates two short answer
+cards and the patient selects by gaze direction, narrowing intent over two to three rounds. Rapid
+blinks ($\ge 5$ in 4\,s) trigger an audible siren and a Twilio SMS to the caregiver. The vision
+pipeline runs at 18.4\,ms per frame. Emergency blink detection reaches an F1 of 0.904. Typing
+throughput rises from 2.8 WPM (raw gaze) to 11.4 WPM with LLM abbreviation expansion and
+22.5 WPM in binary conversation mode, with a Keystroke Savings rate of 84.2\%.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -63,25 +82,38 @@ Assistive Communication, ALS, Eye-Gaze Tracking, MediaPipe Iris Detection, Large
 \end{IEEEkeywords}
 
 \section{Introduction}
-Severe motor neuron disorders, most notably Amyotrophic Lateral Sclerosis (ALS), brainstem stroke, and high-level spinal cord injuries, systematically destroy an individual's voluntary muscular control while leaving cognitive functions completely intact \cite{murray2021global}. In late-stage ALS, patients enter a state of complete paralysis, rendering conventional vocalization and tactile input impossible. For these individuals, eye movement remains one of the few preserved motor channels, making eye-gaze tracking the gold standard for Augmentative and Alternative Communication (AAC) \cite{lugaresi2019mediapipe}.
+ALS, brainstem stroke, and high-level spinal cord injuries destroy voluntary muscle control while
+leaving cognition intact \cite{murray2021global}. In late-stage ALS, eye movement is often the
+only remaining motor channel, which is why eye-gaze AAC systems exist \cite{lugaresi2019mediapipe}.
 
-Despite the clinical potential of AAC systems, real-world adoption remains severely constrained by economic, technical, and ergonomic barriers:
+Four problems limit how widely these systems are used in practice.
+First, commercial gaze trackers (Tobii Dynavox, Smartbox Grid) cost \$5,000--\$15,000 because
+they need active infrared illuminators and high-speed cameras \cite{abilkaiyrkyzy2024dialogue}.
+Second, cheaper webcam-based systems map raw gaze to a screen cursor. Because gaze naturally
+scans the screen to read the UI, the cursor fires accidental key presses continuously, a problem
+called the Midas Touch \cite{soukupova2016real}.
+Third, standard calibration requires the patient to fixate on 9--16 grid targets in sequence,
+which is exhausting for people with nystagmus or low eye movement range \cite{trnka2009user}.
+Fourth, letter-by-letter typing averages fewer than 3 WPM without language prediction, which
+makes long sentences impractical \cite{singh2025innovative}.
+
+GazeSpeak addresses all four problems. It runs on a standard RGB webcam, uses a three-point
+calibration that takes under ten seconds, and replaces the cursor with a step-based navigation
+model that eliminates accidental selections. An LLM layer raises effective throughput to
+22.5 WPM. This paper's main contributions are:
+
 \begin{enumerate}
-    \item \textbf{Prohibitive Cost \& Hardware Dependency}: Commercial eye-gaze systems (e.g., Tobii Dynavox, Smartbox Grid) rely on specialized hardware setups incorporating active infrared (IR) illuminators and high-frame-rate infrared cameras, resulting in system costs ranging from \$5,000 to over \$15,000 \cite{abilkaiyrkyzy2024dialogue}. This creates an insurmountable financial barrier for families in resource-constrained environments.
-    \item \textbf{Visual Strain \& The Midas Touch Problem}: Standard computer vision AAC solutions attempt to map 2D eye gaze coordinates directly to a screen mouse pointer. Because human gaze naturally scans the screen to parse visual UI elements, continuously activating dwell selection based on free 2D gaze position leads to frequent accidental keypresses, a phenomenon known in human-computer interaction as the ``Midas Touch'' problem \cite{soukupova2016real}.
-    \item \textbf{Complex Calibration Protocols}: Traditional gaze typing requires multi-point 2D grid calibrations (9 to 16 calibration targets) requiring sustained visual fixation. For fatigue-prone ALS patients or individuals with ocular nystagmus, maintaining accurate 2D grid fixation is physically exhausting and frequently fails \cite{trnka2009user}.
-    \item \textbf{Low Communication Rate}: Letter-by-letter gaze typing is extraordinarily slow, averaging fewer than 3 words per minute (WPM). Without intelligent language prediction, patients face immense fatigue when trying to construct full sentences \cite{singh2025innovative}.
+    \item A discrete step-based gaze navigation model where left/right gaze steps the keyboard
+          highlight by one key and center gaze arms the dwell timer, removing the Midas Touch
+          problem by design.
+    \item A three-point horizontal calibration with IQR outlier filtering that adapts zone
+          thresholds to each patient's eye movement range in under ten seconds.
+    \item A two-tier language engine combining an instant local dictionary with asynchronous
+          Groq Llama-3.3 70B for word prediction, abbreviation expansion, and a binary
+          conversation mode.
+    \item A rapid-blink emergency alert that counts blinks in a sliding 4-second window and
+          triggers an audible siren plus a Twilio SMS when five or more blinks are detected.
 \end{enumerate}
-
-To overcome these fundamental challenges, we introduce \textbf{GazeSpeak}, an open-source, software-only desktop AAC system that enables rapid, reliable eye-gaze typing using an off-the-shelf RGB webcam without any specialized infrared hardware.
-
-\textbf{Main Technical Contributions}:
-\begin{itemize}
-    \item \textbf{Discrete Step-Based Horizontal Navigation}: We replace continuous 2D screen coordinate mapping with a discrete 1D/2D step-based highlight navigation framework. Looking Left or Right steps the highlighted selection across keyboard keys (like arrow keys), while looking straight ahead (Center) arms the selection dwell timer.
-    \item \textbf{Sub-Pixel Iris Tracking \& 3-Point Fast Calibration}: Utilizing MediaPipe's 478 3D landmark mesh, GazeSpeak computes the normalized iris centroid relative to outer/inner eye corners. A fast 3-point calibration protocol (Left, Center, Right) uses Interquartile Range (IQR) outlier filtering to establish personalized horizontal gaze thresholds in under 10 seconds.
-    \item \textbf{Hybrid Dual-Engine Language Integration}: We integrate a multi-stage NLP pipeline comprising an instant offline frequency-ranked dictionary with asynchronous Groq LLM (Llama-3.3 70B) inference. This supports context-aware next-word prediction, intelligent consonant abbreviation expansion (e.g., ``ftk'' $\rightarrow$ ``from the kitchen''), and an interactive binary decision-tree dialogue mode.
-    \item \textbf{Automated Eye Aspect Ratio (EAR) Emergency SOS}: We implement real-time 6-point Eye Aspect Ratio tracking to monitor rapid blink patterns ($\ge 5$ blinks in 4 seconds). Triggers execute a continuous audio siren and dispatch an emergency SMS to caregivers via the Twilio REST API.
-\end{itemize}
 
 % ==========================================
 % SECTION II: BACKGROUND & RELATED WORK
@@ -89,15 +121,27 @@ To overcome these fundamental challenges, we introduce \textbf{GazeSpeak}, an op
 \section{Background and Related Work}
 
 \subsection{Eye Tracking in Assistive Communication}
-Eye-gaze tracking technologies fall broadly into two categories: hardware-based infrared corneal reflection systems and software-based RGB computer vision algorithms. Hardware systems compute gaze vectors by measuring the spatial vector between the pupil center and infrared corneal glints \cite{abilkaiyrkyzy2024dialogue}. While offering high spatial accuracy ($<0.5^\circ$), their extreme cost restricts accessibility.
+Infrared eye trackers measure the vector between the pupil center and corneal glints from an
+active IR illuminator \cite{abilkaiyrkyzy2024dialogue}. They reach sub-degree accuracy but cost
+tens of thousands of dollars. Webcam-based alternatives use facial landmark libraries such as
+Dlib or MediaPipe. Their gaze estimates carry spatial jitter of $2^\circ$--$4^\circ$, which is
+too noisy for continuous 2D cursor control on small keyboard keys \cite{lugaresi2019mediapipe}.
+GazeSpeak sidesteps this by treating gaze as a three-zone discrete signal rather than a
+continuous coordinate.
 
-Conversely, webcam-based software solutions rely on facial landmark detection libraries such as Dlib, OpenCV Haar cascades, or MediaPipe. Early software gaze typers attempted direct 2D coordinate mapping onto virtual keyboards. However, webcam resolution limitations (640x480) and ambient lighting variations introduce spatial jitter of $2.0^\circ$--$4.0^\circ$, causing continuous 2D cursor typers to suffer from misclicks and severe visual fatigue \cite{lugaresi2019mediapipe}.
+\subsection{Predictive AAC and Language Modeling}
+AAC typing speed research has moved from n-gram models (Dasher, GazeTalk) to LLM-based
+completion \cite{trnka2009user}. LLMs generate contextually relevant predictions from prior
+dialogue \cite{chen2025detecting, singh2025innovative}. GazeSpeak uses a two-tier approach:
+the local dictionary returns results in under 1\,ms, and a background thread calls
+Groq Llama-3.3 70B when a network connection is available, replacing local predictions
+without blocking the UI.
 
-\subsection{Predictive AAC Paradigms \& Language Modeling}
-To mitigate slow typing speeds, AAC researchers have explored predictive statistical models, ranging from n-gram language models (e.g., Dasher, GazeTalk) to modern neural completion engines \cite{trnka2009user}. Recent advancements in Large Language Models (LLMs) allow context-aware text generation based on prior dialogue history \cite{chen2025detecting, singh2025innovative}. GazeSpeak expands upon these foundations by deploying a dual-tier language system: instant local dictionary lookup ($<1$ ms) paired with background asynchronous LLM generation (Groq Llama-3.3 70B Versatile), achieving high Keystroke Savings (KSS) without blocking the user interface.
-
-\subsection{Blink Detection \& Safety Protocols}
-Blink-based signaling provides an alternative binary channel for paralyzed patients. Soukupov{\'a} and {\v{C}}ech \cite{soukupova2016real} introduced the Eye Aspect Ratio (EAR), which computes the ratio of vertical to horizontal eye landmark distances. GazeSpeak adopts EAR monitoring to distinguish natural physiological blinks from deliberate rapid-blink emergency SOS signals.
+\subsection{Blink Detection and Safety}
+Soukupov{\'a} and {\v{C}}ech \cite{soukupova2016real} defined the Eye Aspect Ratio (EAR) as
+the ratio of vertical to horizontal eye landmark distances. EAR drops below a threshold during
+a blink and recovers when the eye reopens. GazeSpeak uses the same measure to separate
+physiological blinks from deliberate rapid-blink SOS signals.
 
 \begin{table}[htbp]
 \caption{Comparative Analysis of AAC Eye-Tracking Frameworks}
@@ -124,45 +168,33 @@ Emergency SOS Siren/SMS & External Button & None & \textbf{Automated EAR Blink S
 \section{System Design and Methodology}
 
 \subsection{System Architecture}
-The software architecture of GazeSpeak follows a multi-threaded, signal-driven modular design developed in Python 3.13 and PyQt6. The primary subsystem workflows are detailed in Fig. \ref{fig:arch_diagram}.
+The software architecture of GazeSpeak follows a multi-threaded, signal-driven modular design
+developed in Python 3.13 and PyQt6. Fig.~\ref{fig:dataflow} shows the data flow between modules.
+Fig.~\ref{fig:sysarch} shows the full modular system architecture across three layers: inputs,
+processing, and external services.
 
 \begin{figure}[htbp]
 \centering
-\fbox{
-\begin{minipage}{0.92\linewidth}
-\small
-\textbf{[Webcam Video Stream (640x480 @ 30fps)]}
-\begin{center} $\Downarrow$ \textit{OpenCV BGR$\rightarrow$RGB \& Mirror Flip} \end{center}
-\textbf{[GazeTracker Thread (MediaPipe 478 Mesh)]}
-\begin{center} $\Downarrow$ \textit{Extract Iris (468, 473) \& EAR (33, 133, 263, 362)} \end{center}
-\begin{tabular}{cc}
-\textbf{(Path A: EAR Blink)} & \textbf{(Path B: Iris Ratio $R_x$)} \\
-$\Downarrow$ \textit{Window Sliding Deque} & $\Downarrow$ \textit{3-Point Calibrated Map} \\
-\textbf{[BlinkAlertManager]} & \textbf{[Hysteresis State Machine]} \\
-$\Downarrow \ge 5\text{ blinks / 4s}$ & $\Downarrow N=2\text{ frames threshold}$ \\
-\textbf{[Siren + Twilio SMS]} & \textbf{[Zone: LEFT / CENTER / RIGHT]} \\
-\end{tabular}
-\begin{center} $\Downarrow$ \textit{CENTER Zone Returns} \end{center}
-\textbf{[Dwell Timer Arming \& Progress Ring (60fps)]}
-\begin{center} $\Downarrow$ \textit{Selection Event} \end{center}
-\textbf{[SentenceBar Buffer $\rightarrow$ Hybrid NLP Engine]}
-\begin{center} $\Downarrow$ \textit{pyttsx3 Offline Speech Synthesis} \end{center}
-\textbf{[Spoken Vocalization / Caretaker Feedback]}
-\end{minipage}
-}
-\caption{Architectural Block Diagram of the GazeSpeak AAC System.}
-\label{fig:arch_diagram}
+\includegraphics[width=\columnwidth]{dataflow_diagram.png}
+\caption{Data flow through the GazeSpeak AAC pipeline.}
+\label{fig:dataflow}
 \end{figure}
 
-\subsection{Sub-Pixel Iris Tracking \& Landmark Geometry}
-Video frames captured via OpenCV at $640\times 480$ resolution ($30$ fps) are horizontally mirrored ($cv2.flip(frame, 1)$) and passed to MediaPipe's `FaceLandmarker` (Tasks API). MediaPipe generates 478 3D facial landmarks in normalized coordinates $(x, y, z \in [0.0, 1.0])$.
+\begin{figure*}[htbp]
+\centering
+\includegraphics[width=\textwidth]{Sys_arch.png}
+\caption{GazeSpeak modular system architecture. The gaze tracker runs as a background QThread;
+LLM calls run in daemon threads and results are marshalled back to the GUI via Qt signals.}
+\label{fig:sysarch}
+\end{figure*}
 
-Specific facial landmark indices utilized:
-\begin{itemize}
-    \item \textbf{Left Eye Corner Indices}: Outer corner $p_{33}$, Inner corner $p_{133}$, Top $p_{159}$, Bottom $p_{145}$.
-    \item \textbf{Right Eye Corner Indices}: Outer corner $p_{263}$, Inner corner $p_{362}$, Top $p_{386}$, Bottom $p_{374}$.
-    \item \textbf{Iris Centroids}: Left iris center $p_{468}$ (ring $p_{469\text{--}472}$), Right iris center $p_{473}$ (ring $p_{474\text{--}477}$).
-\end{itemize}
+\subsection{Iris Tracking and Landmark Geometry}
+Each webcam frame ($640\times480$, 30\,fps) is flipped horizontally and passed to MediaPipe's
+FaceLandmarker. The model returns 478 3D facial landmarks normalized to $[0.0, 1.0]$. The
+landmarks used for gaze are: left eye outer corner $p_{33}$, inner corner $p_{133}$, top
+$p_{159}$, bottom $p_{145}$; right eye outer $p_{263}$, inner $p_{362}$, top $p_{386}$,
+bottom $p_{374}$; left iris center $p_{468}$ (ring $p_{469\text{--}472}$); right iris center
+$p_{473}$ (ring $p_{474\text{--}477}$).
 
 For each eye, the horizontal eye width in pixels is calculated using the Euclidean norm:
 \begin{equation}
@@ -189,35 +221,29 @@ To eliminate high-frequency ocular jitter and camera noise, an Exponential Movin
 S_x^{(t)} = \alpha \cdot \bar{R}_x^{(t)} + (1 - \alpha) \cdot S_x^{(t-1)}
 \end{equation}
 
-\subsection{Fast 3-Point Horizontal Calibration Protocol}
-Unlike tedious 2D grid calibrations, GazeSpeak employs a rapid 3-point horizontal calibration process (Left, Center, Right targets).
+\subsection{Three-Point Horizontal Calibration}
+On launch, the patient fixates on three screen dots at $X = 8\%$ (left), $X = 50\%$ (center),
+and $X = 92\%$ (right). The system records 60 gaze ratio samples per dot and removes
+outliers using IQR bounds:
+\begin{equation}
+X_{\text{filtered}} = \{x_i \mid Q_1 - 1.5\cdot\text{IQR} \le x_i \le Q_3 + 1.5\cdot\text{IQR}\}
+\end{equation}
+The mean of the filtered samples gives $\bar{R}_{\text{left}}, \bar{R}_{\text{center}},
+\bar{R}_{\text{right}}$. Raw gaze ratios are then linearly mapped to screen coordinates:
+\begin{equation}
+S_x = \frac{\bar{R}_x - \bar{R}_{\text{left}}}{\bar{R}_{\text{right}} - \bar{R}_{\text{left}}}
+\end{equation}
+The calibrated center position $S_{\text{center}}$ sets asymmetric zone boundaries so that
+patients with slightly off-center neutral gaze still get a usable dead zone:
+\begin{equation}
+\text{Zone}_{\text{LEFT}} = \max\!\left(0, \; S_{\text{center}} - \max(0.55 S_{\text{center}},\, 0.04)\right)
+\end{equation}
+\begin{equation}
+\text{Zone}_{\text{RIGHT}} = \min\!\left(1, \; S_{\text{center}} + \max(0.45(1 - S_{\text{center}}),\, 0.12)\right)
+\end{equation}
 
-\begin{enumerate}
-    \item \textbf{Sampling \& Outlier Rejection}: The user fixates on screen dots at $X=8\%$ (Left), $X=50\%$ (Center), and $X=92\%$ (Right). The system collects $N_{\text{samp}} = 60$ raw ratio samples per point. Samples are filtered using Interquartile Range (IQR) bounds to reject saccadic drift:
-    \begin{equation}
-    Q_1 = P_{25}(X), \quad Q_3 = P_{75}(X), \quad \text{IQR} = Q_3 - Q_1
-    \end{equation}
-    \begin{equation}
-    X_{\text{filtered}} = \{x_i \in X \mid Q_1 - 1.5\cdot\text{IQR} \le x_i \le Q_3 + 1.5\cdot\text{IQR}\}
-    \end{equation}
-    The sample mean $\bar{R}_{\text{left}}, \bar{R}_{\text{center}}, \bar{R}_{\text{right}}$ is derived from $X_{\text{filtered}}$.
-    
-    \item \textbf{Normalized Screen Mapping}: Linear interpolation maps raw gaze ratio $\bar{R}_x$ to normalized screen coordinate $S_x \in [0.0, 1.0]$:
-    \begin{equation}
-    S_x = \frac{\bar{R}_x - \bar{R}_{\text{left}}}{\bar{R}_{\text{right}} - \bar{R}_{\text{left}}}
-    \end{equation}
-    
-    \item \textbf{Proportional Zone Thresholding}: Normalized center ratio $S_{\text{center}}$ establishes asymmetric dead-zone boundaries:
-    \begin{equation}
-    \text{Zone}_{\text{LEFT}} = \max\left(0.0, \; S_{\text{center}} - \max(0.55 \cdot S_{\text{center}}, \, 0.04)\right)
-    \end{equation}
-    \begin{equation}
-    \text{Zone}_{\text{RIGHT}} = \min\left(1.0, \; S_{\text{center}} + \max(0.45 \cdot (1 - S_{\text{center}}), \, 0.12)\right)
-    \end{equation}
-\end{enumerate}
-
-\subsection{Step-Based Navigation \& Hysteresis State Machine}
-Gaze direction is categorized into three discrete zones:
+\subsection{Step-Based Navigation with Hysteresis}
+Each smoothed gaze reading maps to one of three zones:
 \begin{equation}
 \text{Raw Zone}^{(t)} = \begin{cases}
 \text{LEFT} & \text{if } S_x^{(t)} < \text{Zone}_{\text{LEFT}} \\
@@ -226,65 +252,69 @@ Gaze direction is categorized into three discrete zones:
 \end{cases}
 \end{equation}
 
-To prevent unintended stepping from momentary eye flinches, a hysteresis filter requires candidate zone changes to persist for $N_{\text{hyst}} = 2$ consecutive frames before committing:
+A zone change is only committed after $N = 2$ consecutive frames agree on the new zone. This
+adds about 66\,ms of latency at 30\,fps, which is imperceptible, and stops brief eye flinches
+from triggering unwanted steps:
 \begin{equation}
 \text{Zone}_{\text{committed}}^{(t)} = \begin{cases}
-\text{Zone}_{\text{candidate}} & \text{if } \sum_{k=0}^{1} \mathbb{I}(\text{Raw Zone}^{(t-k)} = \text{Zone}_{\text{candidate}}) = 2 \\
+\text{Zone}_{\text{candidate}} & \text{if two consecutive frames agree} \\
 \text{Zone}_{\text{committed}}^{(t-1)} & \text{otherwise}
 \end{cases}
 \end{equation}
 
-\textbf{Navigation \& Dwell Arming Mechanics}:
-\begin{itemize}
-    \item \textbf{Step Action}: Transitioning from `CENTER` $\rightarrow$ `LEFT` steps the highlighted selection left by one key; `CENTER` $\rightarrow$ `RIGHT` steps right by one key. Stepping disarms the dwell timer.
-    \item \textbf{Neutral Arming}: Returning to `CENTER` stops stepping and \textbf{arms} the dwell timer on the currently highlighted key.
-    \item \textbf{Circular Wrapping}: Stepping past column bounds wraps to adjacent rows. Stepping past the last keyboard row wraps up to the Word Prediction suggestion strip.
-\end{itemize}
+When the zone transitions from CENTER to LEFT or RIGHT, the keyboard highlight moves one key in
+that direction. Returning to CENTER stops stepping and arms the dwell timer. The highlight wraps
+circularly across rows and up to the word prediction strip.
 
-\subsection{Dwell Selection \& Visual Feedback}
-When armed at `CENTER`, an internal 60 fps timer advances selection progress $P \in [0.0, 1.0]$:
+\subsection{Dwell Selection and Visual Feedback}
+While armed, a 60\,fps timer advances a selection progress value $P \in [0.0, 1.0]$:
 \begin{equation}
-P^{(t)} = \min\left(1.0, \; P^{(t-1)} + \frac{16\text{ ms}}{\text{DwellTime}_{\text{target}}}\right)
+P^{(t)} = \min\!\left(1.0,\; P^{(t-1)} + \frac{16\,\text{ms}}{T_{\text{dwell}}}\right)
 \end{equation}
-where $\text{DwellTime}_{\text{target}}$ is user-configurable (300 ms to 2500 ms; default 800 ms). Progress is rendered visually via an anti-aliased progress arc ($0^\circ$ to $360^\circ \times P$). At $P=1.0$, the key fires, flashes green, and dwell is disarmed for a 700 ms refractory pause to prevent accidental repeated typing.
+The default dwell time $T_{\text{dwell}}$ is 800\,ms (adjustable from 300\,ms to 2500\,ms).
+A circular arc drawn around the highlighted key shows progress. At $P = 1.0$ the key fires and
+dwell is locked out for 700\,ms to prevent a double press.
 
-\subsection{Hybrid Natural Language Processing Pipeline}
-GazeSpeak employs a multi-tiered language architecture:
-\begin{enumerate}
-    \item \textbf{Instant Local Frequency Dictionary}: Uses a frequency-ranked lexicon (`dictionary.json`) to return prefix completions in $<1$ ms.
-    \item \textbf{Cloud LLM Context-Aware Prediction}: Asynchronously queries Groq Llama-3.3 70B Versatile in a background thread to generate contextually relevant next-word predictions.
-    \item \textbf{Context-Aware Abbreviation Expansion}: When the patient types a consonant-heavy short token (e.g., ``ftk''), the expander builds a prompt incorporating caretaker questions and conversation history. The LLM evaluates letter-to-word mappings, returning full sentence interpretations (e.g., ``from the kitchen'').
-    \item \textbf{Interactive Binary Conversation Mode}: Caretakers type or speak questions (via AssemblyAI STT). The LLM decomposes responses into two contrasting short answer cards (`LEFT` vs `RIGHT`). The patient selects their answer by looking Left or Right, narrowing intent over 2--3 rounds until a complete sentence is automatically vocalized via `pyttsx3`.
-\end{enumerate}
+\subsection{Language Pipeline}
+Text entry uses two prediction paths in parallel. The local dictionary returns prefix
+completions in under 1\,ms. A background thread calls Groq Llama-3.3 70B and replaces the
+local results when the response arrives (typically 200--500\,ms). When the patient types a
+short consonant-heavy token such as ``ftk'', the system detects it as a likely abbreviation and
+sends it with the full conversation history to the LLM, which returns ranked expansions
+(e.g., ``from the kitchen'', ``from the kids'').
 
-\subsection{Eye Aspect Ratio (EAR) Emergency SOS System}
-To provide an immediate alert mechanism, GazeSpeak monitors Eye Aspect Ratio (EAR) across 6 vertical/horizontal landmarks per eye:
+In binary conversation mode, the caregiver types or dictates a question via AssemblyAI. The
+LLM returns two short answer cards shown on the left and right of the screen. The patient
+selects by gaze direction. After two to three rounds, the LLM composes a full sentence from
+the selection trail and speaks it via pyttsx3.
+
+\subsection{Emergency Alert System}
+The blink monitor computes EAR using six landmarks per eye:
 \begin{equation}
-\text{EAR} = \frac{\|p_{160} - p_{153}\|_2 + \|p_{158} - p_{144}\|_2}{2 \|p_{33} - p_{133}\|_2}
+\text{EAR} = \frac{\|p_{160} - p_{153}\|_2 + \|p_{158} - p_{144}\|_2}{2\,\|p_{33} - p_{133}\|_2}
 \end{equation}
-
-An eye-closed frame is flagged when $\text{EAR} < 0.21$ for $\ge 2$ consecutive frames. Blink timestamps are logged to a sliding 4.0-second queue. Detecting $\ge 5$ blinks within 4 seconds activates an emergency protocol:
-\begin{enumerate}
-    \item Displays a full-screen pulsing red emergency overlay.
-    \item Plays a continuous high/low siren wail (`winsound`).
-    \item Dispatches an emergency SMS alert to the caregiver's mobile phone via Twilio REST API.
-\end{enumerate}
+A blink is recorded when EAR drops below 0.21 for at least two consecutive frames and then
+rises again. Blink timestamps go into a sliding 4-second window. Five or more blinks in that
+window trigger: (1) a full-screen red overlay, (2) a continuous alternating-tone siren via
+\texttt{winsound}, and (3) a Twilio SMS to the caregiver's phone. A 60-second cooldown prevents
+repeat triggers from sustained distress blinking.
 
 % ==========================================
 % SECTION IV: EXPERIMENTAL EVALUATION AND RESULTS
 % ==========================================
 \section{Experimental Evaluation and Results}
 
-\subsection{Experimental Setup \& Benchmark Metrics}
-The framework was evaluated on an Intel Core i7-12700H system equipped with a standard 720p 30 fps RGB webcam. System performance was benchmarked across four dimensions: tracking latency, typing throughput (WPM), Keystroke Savings (KSS), and emergency blink detection accuracy.
-
-Keystroke Savings (KSS) measures input efficiency:
+\subsection{Setup and Metrics}
+All tests ran on an Intel Core i7-12700H with a standard 720p 30\,fps RGB webcam. We measured
+four things: frame processing latency, typing throughput in WPM, Keystroke Savings (KSS), and
+blink detection accuracy. KSS measures how many keystrokes the language engine avoids:
 \begin{equation}
-\text{KSS} = \left( 1 - \frac{N_{\text{gestures}}}{N_{\text{chars}}} \right) \times 100\%
+\text{KSS} = \left(1 - \frac{N_{\text{gestures}}}{N_{\text{chars}}} \right) \times 100\%
 \end{equation}
 
-\subsection{Predictive \& Classification Performance}
-We evaluated the emergency rapid-blink detection module against a test dataset of 250 intentional rapid-blink trials and baseline physiological blink sessions. Results are detailed in Table \ref{tab:sota_metrics}.
+\subsection{Emergency Blink Detection}
+The blink detection module was tested against 250 intentional rapid-blink SOS trials and a
+baseline session of normal physiological blinks. Table~\ref{tab:sota_metrics} shows the results.
 
 \begin{table}[htbp]
 \caption{Emergency SOS Detection Performance vs Baseline Models}
@@ -303,10 +333,49 @@ PR-AUC & \textbf{0.949} & 0.860 & 0.880 \\
 \end{tabular}
 \end{table}
 
-The high recall (0.958) is clinically significant, ensuring near-zero missed emergency alerts.
+Recall (0.958) matters most here: a missed SOS alert is more dangerous than a false one.
+Fig.~\ref{fig:sos_bar} shows the full comparison.
 
-\subsection{Communication Throughput \& Efficiency}
-Table \ref{tab:throughput_modes} compares typing throughput and Keystroke Savings across operating modes.
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    ybar,
+    bar width=9pt,
+    width=\columnwidth,
+    height=5.2cm,
+    ylabel={Score},
+    symbolic x coords={Precision, Recall, F1-Score, ROC-AUC, PR-AUC},
+    xtick=data,
+    x tick label style={font=\scriptsize, rotate=20, anchor=east},
+    nodes near coords,
+    nodes near coords align={vertical},
+    every node near coord/.append style={font=\tiny, rotate=90, anchor=west},
+    ymin=0.55, ymax=1.08,
+    ytick={0.6,0.7,0.8,0.9,1.0},
+    ymajorgrids=true,
+    grid style={dashed, gray!40},
+    legend style={at={(0.01,0.99)}, anchor=north west, font=\scriptsize},
+    legend columns=1,
+]
+\addplot[fill=white, draw=black, pattern=north east lines] coordinates {
+    (Precision, 0.810)(Recall, 0.770)(F1-Score, 0.790)(ROC-AUC, 0.920)(PR-AUC, 0.880)
+};
+\addplot[fill=gray!40, draw=black] coordinates {
+    (Precision, 0.780)(Recall, 0.740)(F1-Score, 0.760)(ROC-AUC, 0.890)(PR-AUC, 0.860)
+};
+\addplot[fill=black!80, draw=black] coordinates {
+    (Precision, 0.854)(Recall, 0.958)(F1-Score, 0.904)(ROC-AUC, 0.975)(PR-AUC, 0.949)
+};
+\legend{Chen et al.~\cite{chen2025detecting}, Singh et al.~\cite{singh2025innovative}, GazeSpeak (Ours)}
+\end{axis}
+\end{tikzpicture}
+\caption{Emergency SOS blink detection performance across metrics. GazeSpeak achieves the highest recall (0.958), minimizing missed alerts in safety-critical scenarios.}
+\label{fig:sos_bar}
+\end{figure}
+
+\subsection{Communication Throughput}
+Table~\ref{tab:throughput_modes} compares WPM and KSS across the four operating modes.
 
 \begin{table}[htbp]
 \caption{Communication Throughput Across Operating Modes}
@@ -324,10 +393,49 @@ Binary Conversation Mode & \textbf{22.5 WPM eq.} & \textbf{84.2\% eq.} & 410.0 m
 \end{tabular}
 \end{table}
 
-Abbreviation expansion increases typing throughput from 2.8 WPM to 11.4 WPM, while Binary Conversation Mode achieves an equivalent communication rate of 22.5 WPM.
+Abbreviation expansion raises throughput from 2.8 to 11.4 WPM. Binary conversation mode
+reaches 22.5 WPM with 84.2\% KSS, meaning a patient produces a full sentence with about
+one sixth of the key selections that letter-by-letter typing would need. Fig.~\ref{fig:wpm_kss}
+shows both metrics side by side.
 
-\subsection{Latency \& Execution Overhead}
-Table \ref{tab:latency_breakdown} breaks down component execution latency. Frame processing completes within 18.4 ms, comfortably maintaining the 30 fps webcam rate (33.3 ms budget).
+\begin{figure}[htbp]
+\centering
+\begin{tikzpicture}
+\begin{axis}[
+    ybar,
+    bar width=10pt,
+    width=\columnwidth,
+    height=5.4cm,
+    ylabel={WPM / KSS (\%)},
+    symbolic x coords={Raw Gaze, Local Dict, LLM Abbrev, Binary Conv},
+    xtick=data,
+    x tick label style={font=\scriptsize, rotate=15, anchor=east},
+    nodes near coords,
+    nodes near coords align={vertical},
+    every node near coord/.append style={font=\tiny},
+    ymin=0, ymax=95,
+    ymajorgrids=true,
+    grid style={dashed, gray!40},
+    legend style={at={(0.01,0.99)}, anchor=north west, font=\scriptsize},
+    legend columns=1,
+]
+\addplot[fill=gray!30, draw=black] coordinates {
+    (Raw Gaze, 2.8)(Local Dict, 6.2)(LLM Abbrev, 11.4)(Binary Conv, 22.5)
+};
+\addplot[fill=black!70, draw=black] coordinates {
+    (Raw Gaze, 0.0)(Local Dict, 38.4)(LLM Abbrev, 68.5)(Binary Conv, 84.2)
+};
+\legend{Mean WPM, KSS (\%)}
+\end{axis}
+\end{tikzpicture}
+\caption{Communication throughput (WPM) and Keystroke Savings (KSS\%) across GazeSpeak operating modes. Binary Conversation Mode achieves an 8$\times$ speedup and 84.2\% keystroke savings over raw gaze typing.}
+\label{fig:wpm_kss}
+\end{figure}
+
+\subsection{Latency Breakdown}
+Table~\ref{tab:latency_breakdown} breaks down per-component time. The total vision pipeline
+finishes in 18.4\,ms, within the 33.3\,ms frame budget for 30\,fps. LLM calls run in
+background threads and do not block the UI.
 
 \begin{table}[htbp]
 \caption{System Latency Breakdown per Component}
@@ -350,21 +458,26 @@ Twilio Emergency SMS Dispatch & 850.0 ms \\
 \end{tabular}
 \end{table}
 
-\subsection{Operational Trade-offs and Limitations}
-While GazeSpeak eliminates the need for expensive hardware, certain operational constraints exist:
-\begin{itemize}
-    \item \textbf{Lighting Sensitivity}: RGB iris tracking performance degrades under extreme low-light environments ($< 20$ lux).
-    \item \textbf{Head Pose Variations}: Large head rotations ($> 15^\circ$) alter landmark geometry, requiring a quick 3-point recalibration ($F5$).
-    \item \textbf{Network Dependency}: Cloud features (Groq LLM, AssemblyAI STT, Twilio SMS) require an active internet connection, though offline dictionary typing and pyttsx3 speech remain fully operational without internet.
-\end{itemize}
+\subsection{Limitations}
+Tracking degrades below about 20 lux. Head rotations above $15^\circ$ shift landmark geometry
+enough to misplace zone thresholds; pressing F5 reruns calibration and fixes this in ten
+seconds. The Groq LLM, AssemblyAI STT, and Twilio SMS all need an internet connection. The
+local dictionary, TTS, and the emergency siren work offline.
 
 % ==========================================
-% SECTION V: CONCLUSION AND FUTURE WORK
+% SECTION V: CONCLUSION
 % ==========================================
-\section{Conclusion and Future Work}
-This paper presented \textbf{GazeSpeak}, an accessible, software-only AAC framework enabling paralyzing condition patients to communicate using a standard RGB webcam. By combining discrete step-based horizontal navigation, 3-point IQR-filtered calibration, hysteresis temporal filtering, and a hybrid NLP engine (local dictionary + Groq Llama-3.3 70B), GazeSpeak eliminates the Midas Touch problem and elevates communication throughput up to 22.5 WPM equivalent. Furthermore, an integrated Eye Aspect Ratio (EAR) rapid-blink monitoring system delivers an automated emergency SOS siren and SMS alert.
+\section{Conclusion}
+GazeSpeak is an open-source AAC system that runs on a standard RGB webcam with no infrared
+hardware. The step-based navigation model removes the Midas Touch problem by treating gaze as
+a directional input rather than a cursor. Three-point calibration takes under ten seconds.
+The two-tier language engine raises effective throughput from 2.8 WPM to 22.5 WPM. The EAR
+blink monitor detects rapid-blink SOS signals with an F1 of 0.904 and dispatches a Twilio SMS
+to the caregiver.
 
-\textbf{Future Work}: Future research will focus on integrating 3D Head Pose Compensation (Perspective-n-Point) to maintain calibration during head movement, expanding discrete step navigation to include vertical gaze zones, deploying quantized local LLMs (e.g., LLaMA-3 8B via ONNX/Ollama) for 100\% offline context awareness, and integrating smart home IoT endpoints for direct environmental control.
+None of these components has been evaluated in a formal study with ALS patients. The next
+step is a controlled trial to measure real-world typing speed, error rate, and user fatigue
+against the current defaults.
 
 % ==========================================
 % REFERENCES
